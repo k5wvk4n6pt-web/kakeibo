@@ -73,10 +73,12 @@
 
   function compute(data, T) {
     const W = windows(T);
+    // 非表示の項目・口座・収入は計算に含めない
+    const hiddenAcc = new Set(data.hiddenAccounts || []);
     const items = []
-      .concat((data.variable || []).map(x => Object.assign({ kind: '変動費' }, x)))
-      .concat((data.fixed || []).map(x => Object.assign({ kind: '固定費' }, x)));
-    const banks = (data.accounts || []).map(name => {
+      .concat((data.variable || []).filter(x => !x.hidden).map(x => Object.assign({ kind: '変動費' }, x)))
+      .concat((data.fixed || []).filter(x => !x.hidden).map(x => Object.assign({ kind: '固定費' }, x)));
+    const banks = (data.accounts || []).filter(a => !hiddenAcc.has(a)).map(name => {
       const bal = (data.balances || {})[name] || {};
       const b = { name, sums: {}, lines: {}, unentered: 0, unenteredDue: 0, next: null, balance: bal.amount == null ? null : Number(bal.amount), balanceUpdatedAt: bal.updatedAt || null };
       for (const w of W) { b.sums[w.key] = 0; b.lines[w.key] = []; }
@@ -115,7 +117,7 @@
       shortfallTotal: entered.reduce((s, b) => s + b.shortfall, 0),
       activeCount: banks.filter(b => b.active).length,
       balanceMissing: banks.filter(b => b.dueActive && b.balance == null).length,
-      income: (data.income || []).map(i => Object.assign({}, i, { next: nextDate(i, T) }))
+      income: (data.income || []).filter(i => !i.hidden).map(i => Object.assign({}, i, { next: nextDate(i, T) }))
         .sort((a, c) => serial(a.next) - serial(c.next))
     };
   }

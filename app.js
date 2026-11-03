@@ -74,7 +74,7 @@
   function normalize(d) {
     if (!d || d.app !== 'kakeibo' || !Array.isArray(d.accounts) || !Array.isArray(d.variable) || !Array.isArray(d.fixed)) throw new Error('入金準備帳のデータではありません');
     const item = (x, fixed) => {
-      const o = { id: x.id || uid(fixed ? 'f' : 'v'), name: String(x.name || '').trim() || '（名称なし）', day: x.day, account: x.account || '', amount: x.amount == null ? null : Number(x.amount), memo: x.memo || '', updatedAt: x.updatedAt || null };
+      const o = { id: x.id || uid(fixed ? 'f' : 'v'), name: String(x.name || '').trim() || '（名称なし）', day: x.day, account: x.account || '', amount: x.amount == null ? null : Number(x.amount), memo: x.memo || '', updatedAt: x.updatedAt || null, hidden: !!x.hidden };
       if (fixed) o.end = x.end || null;
       if (!validDay(o.day)) throw new Error('引落日が読み取れない項目があります：' + o.name);
       if (!validAmt(o.amount)) throw new Error('金額が読み取れない項目があります：' + o.name);
@@ -86,7 +86,8 @@
       variable: d.variable.map(x => item(x, false)),
       fixed: d.fixed.map(x => item(x, true)),
       balances: {},
-      income: Array.isArray(d.income) && d.income.length ? d.income.map(i => ({ id: i.id || uid('i'), name: String(i.name), day: i.day, amount: i.amount == null ? null : Number(i.amount) }))
+      hiddenAccounts: Array.isArray(d.hiddenAccounts) ? d.hiddenAccounts.map(String).filter(a => d.accounts.map(String).includes(a)) : [],
+      income: Array.isArray(d.income) && d.income.length ? d.income.map(i => ({ id: i.id || uid('i'), name: String(i.name), day: i.day, amount: i.amount == null ? null : Number(i.amount), hidden: !!i.hidden }))
         : [{ id: 'i1', name: '直樹', day: 25, amount: null }, { id: 'i2', name: '寿美', day: 15, amount: null }]
     };
     for (const a of out.accounts) {
@@ -103,8 +104,14 @@
     $('#today').textContent = T.y + '年' + T.m + '月' + T.d + '日(' + C.WD[C.weekday(T)] + ')';
     if (!state) { main.innerHTML = welcomeHTML(); bindWelcome(); return; }
     const r = C.compute(state, T);
-    main.innerHTML = backupNoticeHTML() + summaryHTML(r) + banksHTML(r) + listHTML('variable', '変動費', '毎月の金額をここで入力します。') + listHTML('fixed', '固定費', '金額・引落日・口座が変わった時だけ変更します。') + settingsHTML() + backupHTML();
+    const page = PAGES.includes(meta.page) ? meta.page : 'prep';
+    main.innerHTML = page === 'variable' ? listHTML('variable', '変動費', '毎月の金額をここで入力します。')
+      : page === 'fixed' ? listHTML('fixed', '固定費', '金額・引落日・口座が変わった時だけ変更します。')
+      : page === 'settings' ? settingsHTML() + backupHTML()
+      : backupNoticeHTML() + summaryHTML(r) + banksHTML(r);
+    $('#nav').querySelectorAll('[data-page]').forEach(b => { const on = b.dataset.page === page; b.classList.toggle('on', on); b.setAttribute('aria-current', on ? 'page' : 'false'); });
     bindAll();
+    if (typeof syncTyping === 'function') syncTyping();
   }
 
   /** 入力中は入力欄を作り直さず、数字だけ書き換える */
@@ -112,6 +119,7 @@
     const r = C.compute(state, today());
     main.querySelectorAll('[data-sum]').forEach(el => { el.innerHTML = yen(r.totals[el.dataset.sum]); });
     const sb = $('#shortbox'); if (sb) sb.outerHTML = shortboxHTML(r);
+    if (!$('#banksSec')) return;
     const shown = [...main.querySelectorAll('.bank')].map(c => c.dataset.bank).join('|');
     if (shown !== r.banks.filter(b => b.active).map(b => b.name).join('|')) {
       const sec = $('#banksSec'); sec.outerHTML = banksHTML(r); bindBalances(); return;
@@ -212,7 +220,8 @@
 
   function listHTML(kind, title, lead) {
     const T = today();
-    const rows = state[kind].map(it => {
+    const visible = state[kind].filter(x => !x.hidden), hiddenItems = state[kind].filter(x => x.hidden);
+    const rows = visible.map(it => {
       const ended = kind === 'fixed' && it.end && !C.activeIn(it, T.y, T.m);
       return '<div class="row' + (ended ? ' ended' : '') + '" data-kind="' + kind + '" data-id="' + esc(it.id) + '">' +
         '<div class="row-main"><span class="row-name">' + esc(it.name) + '</span>' +
@@ -220,7 +229,7 @@
         '<div class="row-sub">' + daySelect('day-' + esc(it.id), it.day) + acctSelect('acc-' + esc(it.id), it.account) +
         '<span class="stamp" data-stamp>' + stampText(it.updatedAt) + '</span></div>' +
         ((it.memo || it.end) ? '<div class="memo">' + (it.end ? (ended ? '終了しました（' : '終了予定 ') + it.end.replace('-', '/') + (ended ? '）' : '') + (it.memo ? '　' : '') : '') + esc(it.memo) + '</div>' : '') +
-        '<div><button class="ghost small" data-act="edit">名前・メモ・削除</button></div>' +
+        '<div class="row-acts"><button class="ghost small" data-act="edit">名前・メモ・削除</button><button class="ghost small" data-act="hide">非表示にする</button></div>' +
         '<div class="edit" hidden data-editor>' +
         '<label>項目名<input class="text" id="nm-' + esc(it.id) + '" data-f="name" value="' + esc(it.name) + '"></label>' +
         (kind === 'fixed' ? '<label>終了月（空欄なら毎月）<input class="text" type="month" id="end-' + esc(it.id) + '" data-f="end" value="' + esc(it.end || '') + '"></label>' : '') +
@@ -228,31 +237,40 @@
         '<div class="btns"><button class="danger small" data-act="del">この項目を削除</button><button class="small" data-act="close">閉じる</button></div></div>' +
         '</div>';
     }).join('');
-    return '<section id="sec-' + kind + '" aria-label="' + title + '"><div class="section-head"><h2>' + title + '</h2><span class="sub">' + state[kind].length + '件</span></div>' +
+    const hid = hiddenItems.length ? '<details class="hiddenbox"' + (meta['open-' + kind] ? ' open' : '') + ' data-kind="' + kind + '"><summary>非表示の項目 ' + hiddenItems.length + '件（計算に含みません）</summary>' +
+      hiddenItems.map(it => '<div class="hrow" data-kind="' + kind + '" data-id="' + esc(it.id) + '"><span class="row-name">' + esc(it.name) + '<span class="sub">' + dayLabel(it.day) + '・' + esc(it.account || '口座なし') + '・' + (it.amount == null ? '未入力' : nf.format(it.amount) + '円') + '</span></span><button class="small" data-act="unhide">表示する</button></div>').join('') +
+      '</details>' : '';
+    return '<section id="sec-' + kind + '" aria-label="' + title + '"><div class="section-head"><h2>' + title + '</h2><span class="sub">表示 ' + visible.length + '件</span></div>' +
       '<p class="sub" style="margin:-4px 0 10px">' + lead + '</p>' +
-      '<div class="list">' + rows + '<div class="add"><button class="ghost" data-act="add" data-kind="' + kind + '">＋ ' + title + 'を追加</button></div></div></section>';
+      '<div class="list">' + rows + '<div class="add"><button class="ghost" data-act="add" data-kind="' + kind + '">＋ ' + title + 'を追加</button></div></div>' + hid + '</section>';
   }
+
+  function hiddenAcc() { return state.hiddenAccounts || (state.hiddenAccounts = []); }
+  function hideBtn(isHidden, act) { return '<button class="small' + (isHidden ? ' primary' : '') + '" data-act="' + act + '">' + (isHidden ? '表示する' : '非表示') + '</button>'; }
 
   function settingsHTML() {
     const used = name => state.variable.concat(state.fixed).filter(x => x.account === name).length;
-    const accRows = state.accounts.map((a, i) => '<div class="srow" data-acc-i="' + i + '">' +
+    const accRows = state.accounts.map((a, i) => '<div class="srow' + (hiddenAcc().includes(a) ? ' is-hidden' : '') + '" data-acc-i="' + i + '">' +
       '<input class="text" id="accname-' + i + '" value="' + esc(a) + '" aria-label="口座名">' +
       '<span class="sub nowrap">' + used(a) + '件</span>' +
+      hideBtn(hiddenAcc().includes(a), 'acchide') +
       '<button class="danger small" data-act="accdel">削除</button></div>').join('');
-    const incRows = state.income.map(i => '<div class="srow" data-inc-id="' + esc(i.id) + '">' +
+    const incRows = state.income.map(i => '<div class="srow' + (i.hidden ? ' is-hidden' : '') + '" data-inc-id="' + esc(i.id) + '">' +
       '<input class="text" id="incname-' + esc(i.id) + '" value="' + esc(i.name) + '" aria-label="収入の名前">' +
       daySelect('incday-' + esc(i.id), i.day) +
+      hideBtn(!!i.hidden, 'inchide') +
       '<button class="danger small" data-act="incdel">削除</button></div>').join('');
     return '<section id="sec-settings" aria-label="口座と収入の設定"><div class="section-head"><h2>口座と収入の設定</h2></div>' +
       '<div class="list settings">' +
-      '<div class="shead">口座<span class="sub">名前を変えると、その口座の引落もまとめて変わります</span></div>' + accRows +
+      '<div class="shead">口座<span class="sub">名前を変えると、その口座の引落もまとめて変わります。非表示の口座は準備ページに出ず、計算にも含みません</span></div>' + accRows +
       '<div class="srow add-row"><input class="text" id="accnew" placeholder="新しい口座名" aria-label="新しい口座名"><button class="small" data-act="accadd">追加</button></div>' +
-      '<div class="shead">収入<span class="sub">名前と入金日。金額は画面上部で入力します</span></div>' + incRows +
+      '<div class="shead">収入<span class="sub">名前と入金日。金額は準備ページで入力します</span></div>' + incRows +
       '<div class="srow add-row"><input class="text" id="incnew" placeholder="新しい収入の名前" aria-label="新しい収入の名前"><button class="small" data-act="incadd">追加</button></div>' +
       '</div></section>';
   }
 
   function bindSettings() {
+    if (!$('#sec-settings')) return;
     main.querySelectorAll('[data-acc-i]').forEach(row => {
       const i = Number(row.dataset.accI); const old = state.accounts[i];
       row.querySelector('input').addEventListener('change', e => {
@@ -264,7 +282,13 @@
         let cnt = 0;
         for (const it of state.variable.concat(state.fixed)) if (it.account === old) { it.account = n; cnt++; }
         state.balances[n] = state.balances[old] || { amount: null, updatedAt: null }; delete state.balances[old];
+        state.hiddenAccounts = hiddenAcc().map(a => a === old ? n : a);
         save(); renderKeep(); toast('「' + n + '」に変更しました（引落' + cnt + '件）');
+      });
+      row.querySelector('[data-act="acchide"]').addEventListener('click', () => {
+        const h = hiddenAcc(); const on = h.includes(old);
+        state.hiddenAccounts = on ? h.filter(a => a !== old) : h.concat(old);
+        save(); renderKeep(); toast(on ? '「' + old + '」を表示しました' : '「' + old + '」を非表示にしました（計算に含みません）');
       });
       row.querySelector('[data-act="accdel"]').addEventListener('click', () => {
         const uses = state.variable.concat(state.fixed).filter(x => x.account === old);
@@ -273,7 +297,7 @@
           return;
         }
         confirmSheet('「' + old + '」を削除しますか？', '<p class="sub" style="margin:0">入力した残高も消えます。</p>', '削除する', () => {
-          state.accounts = state.accounts.filter(a => a !== old); delete state.balances[old]; save(); renderKeep(); toast('削除しました');
+          state.accounts = state.accounts.filter(a => a !== old); delete state.balances[old]; state.hiddenAccounts = hiddenAcc().filter(a => a !== old); save(); renderKeep(); toast('削除しました');
         }, true);
       });
     });
@@ -288,6 +312,7 @@
       const inc = state.income.find(x => x.id === row.dataset.incId);
       row.querySelector('input').addEventListener('change', e => { const n = e.target.value.trim(); if (!n) { e.target.value = inc.name; return; } inc.name = n; save(); renderKeep(); });
       row.querySelector('select').addEventListener('change', e => { inc.day = e.target.value === 'end' ? 'end' : Number(e.target.value); save(); renderKeep(); });
+      row.querySelector('[data-act="inchide"]').addEventListener('click', () => { inc.hidden = !inc.hidden; save(); renderKeep(); toast(inc.hidden ? '「' + inc.name + '」を非表示にしました' : '「' + inc.name + '」を表示しました'); });
       row.querySelector('[data-act="incdel"]').addEventListener('click', () => confirmSheet('収入「' + inc.name + '」を削除しますか？', '', '削除する', () => {
         state.income = state.income.filter(x => x.id !== inc.id); save(); renderKeep(); toast('削除しました');
       }, true));
@@ -342,6 +367,15 @@
         state[row.dataset.kind] = state[row.dataset.kind].filter(x => x.id !== it.id); save(); renderKeep(); toast('削除しました');
       }, true));
     });
+    main.querySelectorAll('.row [data-act="hide"]').forEach(btn => btn.addEventListener('click', () => {
+      const row = btn.closest('.row'); const it = findItem(row);
+      it.hidden = true; save(); renderKeep(); toast('「' + it.name + '」を非表示にしました（計算に含みません）');
+    }));
+    main.querySelectorAll('.hrow [data-act="unhide"]').forEach(btn => btn.addEventListener('click', () => {
+      const row = btn.closest('.hrow'); const it = findItem(row);
+      it.hidden = false; save(); renderKeep(); toast('「' + it.name + '」を表示しました');
+    }));
+    main.querySelectorAll('details.hiddenbox').forEach(d => d.addEventListener('toggle', () => { meta['open-' + d.dataset.kind] = d.open; saveMeta(); }));
     bindBalances();
     main.querySelectorAll('[data-inc]').forEach(el => {
       const inc = state.income.find(i => i.id === el.dataset.inc);
@@ -439,35 +473,32 @@
   }
 
   /* ---------- 移動ボタン ---------- */
+  const PAGES = ['prep', 'variable', 'fixed', 'settings'];
+  const TYPING = 'input:not([type="file"]):not([type="button"]), select, textarea';
+  function syncTyping() {
+    const a = document.activeElement;
+    document.body.classList.toggle('typing', !!(a && a.isConnected && a !== document.body && a.matches(TYPING)));
+  }
   const nav = $('#nav');
   nav.addEventListener('click', e => {
-    const b = e.target.closest('[data-go]'); if (!b) return;
-    const t = b.dataset.go === 'top' ? null : $('#' + b.dataset.go);
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (!t) window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
-    else t.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+    const b = e.target.closest('[data-page]'); if (!b) return;
+    if (meta.page === b.dataset.page) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    meta.page = b.dataset.page; saveMeta(); renderAll(); window.scrollTo(0, 0);
   });
-  const navMark = () => {
-    const ids = ['sec-top', 'banksSec', 'sec-variable', 'sec-fixed', 'sec-settings'];
-    let cur = 'sec-top';
-    for (const id of ids) { const el = document.getElementById(id); if (el && el.getBoundingClientRect().top < window.innerHeight * 0.35) cur = id; }
-    if (cur === 'sec-top') cur = 'banksSec';
-    nav.querySelectorAll('[data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === cur || (cur === 'banksSec' && b.dataset.go === 'top')));
-  };
-  window.addEventListener('scroll', () => { cancelAnimationFrame(navMark._r); navMark._r = requestAnimationFrame(navMark); }, { passive: true });
-  // 入力中はキーボードと重ならないよう隠す
-  document.addEventListener('focusin', e => { if (e.target.matches('input,select')) document.body.classList.add('typing'); });
-  document.addEventListener('focusout', () => setTimeout(() => { if (!document.activeElement || !document.activeElement.matches('input,select')) document.body.classList.remove('typing'); }, 50));
+  // 入力中はキーボードと重ならないよう隠す（ファイル選択は除く。描き直しで入力欄が消えた時も戻す）
+  document.addEventListener('focusin', () => syncTyping());
+  document.addEventListener('focusout', () => setTimeout(syncTyping, 60));
+  window.addEventListener('focus', () => syncTyping());
+  window.addEventListener('pageshow', () => syncTyping());
 
   /* ---------- 起動 ---------- */
   load();
   renderAll();
-  navMark();
   if (state) $('#saved').textContent = '保存済み';
   // 日付が変わったら確認日と集計を更新（入力中は邪魔しない）
   const tick = () => { if (keyOf(today()) !== todayKey && !(document.activeElement && document.activeElement.matches('input,select'))) renderKeep(); };
   setInterval(tick, 30000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); syncTyping(); } });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
