@@ -91,6 +91,14 @@ header.top { padding-top: 18px; display: flex; justify-content: space-between; a
 .shortbox.ok { background: var(--ok-bg); color: var(--ok); }
 .shortbox.none { background: var(--accent-soft); color: var(--accent); }
 .shortbox .big { font-size: 24px; font-weight: 700; }
+.tots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tot { border-radius: 10px; padding: 10px 12px; display: grid; gap: 2px; min-width: 0; }
+.tot .tl { font-size: 12px; font-weight: 600; }
+.tot .big { font-size: 22px; font-weight: 700; }
+.tot small { font-size: 12px; opacity: .85; }
+.tot.short { background: var(--short-bg); color: var(--short); }
+.tot.plus { background: var(--ok-bg); color: var(--ok); }
+.tot.zero { background: var(--accent-soft); color: var(--muted); }
 .shortbox small { display: block; font-size: 12px; opacity: .85; }
 .income { display: grid; gap: 6px; border-top: 1px dashed var(--line); padding-top: 12px; }
 .income-row { display: flex; align-items: center; gap: 10px; font-size: 14px; }

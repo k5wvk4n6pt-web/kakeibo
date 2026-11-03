@@ -115,6 +115,9 @@
       dueCount: banks.filter(b => b.dueActive).length,
       grandTotal: banks.reduce((s, b) => s + b.total, 0),
       shortfallTotal: entered.reduce((s, b) => s + b.shortfall, 0),
+      shortCount: entered.filter(b => b.shortfall > 0).length,
+      surplusTotal: entered.reduce((s, b) => s + b.surplus, 0),
+      surplusCount: entered.filter(b => b.surplus > 0).length,
       activeCount: banks.filter(b => b.active).length,
       balanceMissing: banks.filter(b => b.dueActive && b.balance == null).length,
       income: (data.income || []).filter(i => !i.hidden).map(i => Object.assign({}, i, { next: nextDate(i, T) }))

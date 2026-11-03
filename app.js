@@ -154,16 +154,18 @@
   }
 
   function shortboxHTML(r) {
-    let cls = '', main1, sub;
-    if (r.balanceMissing === r.dueCount && r.dueCount > 0) {
-      cls = 'none'; main1 = '<span>残高を入力すると不足額が出ます</span>'; sub = '';
-    } else if (r.shortfallTotal > 0) {
-      main1 = '<span>不足の合計<small>' + md(r.closing) + '締めまでに入金が必要</small></span><span class="big num">' + yen(r.shortfallTotal) + '</span>';
-    } else {
-      cls = 'ok'; main1 = '<span>不足はありません<small>' + md(r.closing) + '締め・残高を入力した口座</small></span><span class="big num">0<span class="yen">円</span></span>';
+    if (r.dueCount > 0 && r.balanceMissing === r.dueCount) {
+      return '<div id="shortbox"><div class="shortbox none"><span>残高を入力すると、不足と余りの合計が出ます<small>' + md(r.closing) + '締め</small></span></div></div>';
     }
-    const miss = r.balanceMissing > 0 && r.balanceMissing < r.dueCount ? '<div class="flag">残高未入力：' + r.balanceMissing + '口座（不足の合計に含みません）</div>' : '';
-    return '<div id="shortbox"><div class="shortbox ' + cls + '">' + main1 + '</div>' + miss + '</div>';
+    const box = (cls, title, count, amount, sub) => '<div class="tot ' + cls + '"><span class="tl">' + title + '</span>' +
+      '<span class="big num">' + nf.format(amount) + '<span class="yen">円</span></span><small>' + sub + '</small></div>';
+    const short = box(r.shortfallTotal > 0 ? 'short' : 'zero', '不足している口座の合計', r.shortCount, r.shortfallTotal,
+      r.shortCount ? r.shortCount + '口座・入金が必要' : '不足の口座はありません');
+    const plus = box(r.surplusTotal > 0 ? 'plus' : 'zero', '余っている口座の合計', r.surplusCount, r.surplusTotal,
+      r.surplusCount ? r.surplusCount + '口座' : '余りの口座はありません');
+    const miss = r.balanceMissing > 0 ? '<div class="flag">残高未入力：' + r.balanceMissing + '口座（どちらの合計にも含みません）</div>' : '';
+    return '<div id="shortbox"><div class="tots">' + short + plus + '</div>' +
+      '<p class="note" style="margin:6px 0 0">' + md(r.closing) + '締めまでの引落と、入力した残高を口座ごとに比べた合計です。口座間でお金を移すときの目安にしてください。</p>' + miss + '</div>';
   }
 
   function summaryHTML(r) {
