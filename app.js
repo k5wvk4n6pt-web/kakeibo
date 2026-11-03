@@ -107,7 +107,7 @@
     const page = PAGES.includes(meta.page) ? meta.page : 'prep';
     main.innerHTML = page === 'variable' ? listHTML('variable', '変動費', '毎月の金額をここで入力します。')
       : page === 'fixed' ? listHTML('fixed', '固定費', '金額・引落日・口座が変わった時だけ変更します。')
-      : page === 'settings' ? settingsHTML() + backupHTML()
+      : page === 'settings' ? settingsHTML()
       : backupNoticeHTML() + summaryHTML(r) + banksHTML(r);
     $('#nav').querySelectorAll('[data-page]').forEach(b => { const on = b.dataset.page === page; b.classList.toggle('on', on); b.setAttribute('aria-current', on ? 'page' : 'false'); });
     bindAll();
