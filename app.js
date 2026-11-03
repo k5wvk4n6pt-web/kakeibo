@@ -99,10 +99,11 @@
   /* ---------- 画面 ---------- */
   function renderAll() {
     const T = today(); todayKey = keyOf(T);
+    $('#nav').hidden = !state;
     $('#today').textContent = T.y + '年' + T.m + '月' + T.d + '日(' + C.WD[C.weekday(T)] + ')';
     if (!state) { main.innerHTML = welcomeHTML(); bindWelcome(); return; }
     const r = C.compute(state, T);
-    main.innerHTML = backupNoticeHTML() + summaryHTML(r) + banksHTML(r) + listHTML('variable', '変動費', '毎月の金額をここで入力します。') + listHTML('fixed', '固定費', '金額・引落日・口座が変わった時だけ変更します。') + backupHTML();
+    main.innerHTML = backupNoticeHTML() + summaryHTML(r) + banksHTML(r) + listHTML('variable', '変動費', '毎月の金額をここで入力します。') + listHTML('fixed', '固定費', '金額・引落日・口座が変わった時だけ変更します。') + settingsHTML() + backupHTML();
     bindAll();
   }
 
@@ -161,7 +162,7 @@
     const per = r.windows.map(w => '<div class="period' + (w.inClose ? '' : ' after') + '"><span class="lab">' + w.label + 'に必要' + (w.inClose ? '' : '<span class="tag">締め後</span>') + '</span><span class="rng">' + md(w.from) + '〜' + md(w.to) + '</span><span class="val num" data-sum="' + w.key + '">' + yen(r.totals[w.key]) + '</span></div>').join('');
     const inc = r.income.map(i => '<div class="income-row"><span class="who">' + esc(i.name) + '</span><span class="when">' + (i.next ? mdw(i.next) + ' 予定' : '') + '</span>' +
       '<input class="amount' + (i.amount == null ? ' empty' : '') + '" inputmode="numeric" enterkeyhint="done" autocomplete="off" id="inc-' + esc(i.id) + '" data-inc="' + esc(i.id) + '" value="' + yenTxt(i.amount) + '" placeholder="金額（任意）" aria-label="' + esc(i.name) + 'の収入予定額"></div>').join('');
-    return '<section class="summary" aria-label="要約">' +
+    return '<section class="summary" id="sec-top" aria-label="要約">' +
       '<div class="periods">' + per + '</div>' + shortboxHTML(r) +
       '<div class="income"><div class="sub">収入予定（未入金の収入は残高に足しません）</div>' + inc + '</div></section>';
   }
@@ -227,14 +228,80 @@
         '<div class="btns"><button class="danger small" data-act="del">この項目を削除</button><button class="small" data-act="close">閉じる</button></div></div>' +
         '</div>';
     }).join('');
-    return '<section aria-label="' + title + '"><div class="section-head"><h2>' + title + '</h2><span class="sub">' + state[kind].length + '件</span></div>' +
+    return '<section id="sec-' + kind + '" aria-label="' + title + '"><div class="section-head"><h2>' + title + '</h2><span class="sub">' + state[kind].length + '件</span></div>' +
       '<p class="sub" style="margin:-4px 0 10px">' + lead + '</p>' +
       '<div class="list">' + rows + '<div class="add"><button class="ghost" data-act="add" data-kind="' + kind + '">＋ ' + title + 'を追加</button></div></div></section>';
   }
 
+  function settingsHTML() {
+    const used = name => state.variable.concat(state.fixed).filter(x => x.account === name).length;
+    const accRows = state.accounts.map((a, i) => '<div class="srow" data-acc-i="' + i + '">' +
+      '<input class="text" id="accname-' + i + '" value="' + esc(a) + '" aria-label="口座名">' +
+      '<span class="sub nowrap">' + used(a) + '件</span>' +
+      '<button class="danger small" data-act="accdel">削除</button></div>').join('');
+    const incRows = state.income.map(i => '<div class="srow" data-inc-id="' + esc(i.id) + '">' +
+      '<input class="text" id="incname-' + esc(i.id) + '" value="' + esc(i.name) + '" aria-label="収入の名前">' +
+      daySelect('incday-' + esc(i.id), i.day) +
+      '<button class="danger small" data-act="incdel">削除</button></div>').join('');
+    return '<section id="sec-settings" aria-label="口座と収入の設定"><div class="section-head"><h2>口座と収入の設定</h2></div>' +
+      '<div class="list settings">' +
+      '<div class="shead">口座<span class="sub">名前を変えると、その口座の引落もまとめて変わります</span></div>' + accRows +
+      '<div class="srow add-row"><input class="text" id="accnew" placeholder="新しい口座名" aria-label="新しい口座名"><button class="small" data-act="accadd">追加</button></div>' +
+      '<div class="shead">収入<span class="sub">名前と入金日。金額は画面上部で入力します</span></div>' + incRows +
+      '<div class="srow add-row"><input class="text" id="incnew" placeholder="新しい収入の名前" aria-label="新しい収入の名前"><button class="small" data-act="incadd">追加</button></div>' +
+      '</div></section>';
+  }
+
+  function bindSettings() {
+    main.querySelectorAll('[data-acc-i]').forEach(row => {
+      const i = Number(row.dataset.accI); const old = state.accounts[i];
+      row.querySelector('input').addEventListener('change', e => {
+        const n = e.target.value.trim();
+        if (n === old) return;
+        if (!n) { e.target.value = old; toast('口座名を入力してください'); return; }
+        if (state.accounts.includes(n)) { e.target.value = old; toast('同じ名前の口座があります'); return; }
+        state.accounts[i] = n;
+        let cnt = 0;
+        for (const it of state.variable.concat(state.fixed)) if (it.account === old) { it.account = n; cnt++; }
+        state.balances[n] = state.balances[old] || { amount: null, updatedAt: null }; delete state.balances[old];
+        save(); renderKeep(); toast('「' + n + '」に変更しました（引落' + cnt + '件）');
+      });
+      row.querySelector('[data-act="accdel"]').addEventListener('click', () => {
+        const uses = state.variable.concat(state.fixed).filter(x => x.account === old);
+        if (uses.length) {
+          confirmSheet('「' + old + '」は削除できません', '<p class="sub" style="margin:0">この口座を使っている引落が' + uses.length + '件あります（' + uses.slice(0, 5).map(x => esc(x.name)).join('、') + (uses.length > 5 ? ' ほか' : '') + '）。先に変動費・固定費で別の口座に変えてください。</p>', null, null);
+          return;
+        }
+        confirmSheet('「' + old + '」を削除しますか？', '<p class="sub" style="margin:0">入力した残高も消えます。</p>', '削除する', () => {
+          state.accounts = state.accounts.filter(a => a !== old); delete state.balances[old]; save(); renderKeep(); toast('削除しました');
+        }, true);
+      });
+    });
+    const accAdd = () => {
+      const el = $('#accnew'); const n = el.value.trim();
+      if (!n) { toast('口座名を入力してください'); return; }
+      if (state.accounts.includes(n)) { toast('同じ名前の口座があります'); return; }
+      state.accounts.push(n); state.balances[n] = { amount: null, updatedAt: null }; save(); renderKeep(); toast('「' + n + '」を追加しました');
+    };
+    main.querySelector('[data-act="accadd"]').addEventListener('click', accAdd);
+    main.querySelectorAll('[data-inc-id]').forEach(row => {
+      const inc = state.income.find(x => x.id === row.dataset.incId);
+      row.querySelector('input').addEventListener('change', e => { const n = e.target.value.trim(); if (!n) { e.target.value = inc.name; return; } inc.name = n; save(); renderKeep(); });
+      row.querySelector('select').addEventListener('change', e => { inc.day = e.target.value === 'end' ? 'end' : Number(e.target.value); save(); renderKeep(); });
+      row.querySelector('[data-act="incdel"]').addEventListener('click', () => confirmSheet('収入「' + inc.name + '」を削除しますか？', '', '削除する', () => {
+        state.income = state.income.filter(x => x.id !== inc.id); save(); renderKeep(); toast('削除しました');
+      }, true));
+    });
+    main.querySelector('[data-act="incadd"]').addEventListener('click', () => {
+      const el = $('#incnew'); const n = el.value.trim();
+      if (!n) { toast('収入の名前を入力してください'); return; }
+      state.income.push({ id: uid('i'), name: n, day: 25, amount: null }); save(); renderKeep(); toast('「' + n + '」を追加しました（入金日は25日。変更できます）');
+    });
+  }
+
   function backupHTML() {
     const last = meta.lastBackupAt ? stampText(meta.lastBackupAt).replace('更新：', '') : 'まだありません';
-    return '<section class="backup" aria-label="バックアップ"><h2>バックアップ</h2>' +
+    return '<section class="backup" id="sec-backup" aria-label="バックアップ"><h2>バックアップ</h2>' +
       '<p class="sub" style="margin:0">入力内容は自動でこの端末に保存されます。ただしブラウザ内の保存データは消える可能性があるため、月に1回は「ファイル」アプリに保存してください。</p>' +
       '<div class="sub">最後のバックアップ：' + last + '</div>' +
       '<div class="btnrow"><button class="primary" data-act="backup">バックアップを保存</button>' +
@@ -290,6 +357,7 @@
       if (row) { row.querySelector('[data-editor]').hidden = false; row.scrollIntoView({ block: 'center' }); }
     }));
     main.querySelectorAll('[data-act="backup"]').forEach(b => b.addEventListener('click', doBackup));
+    bindSettings();
     bindRestore();
   }
   function bindBalances() {
@@ -315,12 +383,12 @@
   function confirmSheet(title, bodyHTML, okLabel, onOk, danger) {
     const m = $('#modal');
     m.innerHTML = '<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="mt"><h2 id="mt">' + esc(title) + '</h2>' + bodyHTML +
-      '<div class="btnrow"><button id="mCancel">やめる</button><button id="mOk" class="' + (danger ? 'danger' : 'primary') + '">' + esc(okLabel) + '</button></div></div>';
+      '<div class="btnrow"><button id="mCancel">' + (okLabel ? 'やめる' : '閉じる') + '</button>' + (okLabel ? '<button id="mOk" class="' + (danger ? 'danger' : 'primary') + '">' + esc(okLabel) + '</button>' : '') + '</div></div>';
     m.hidden = false;
     const close = () => { m.hidden = true; m.innerHTML = ''; };
     $('#mCancel').onclick = close;
     m.onclick = e => { if (e.target === m) close(); };
-    $('#mOk').onclick = () => { close(); onOk(); };
+    if (okLabel) $('#mOk').onclick = () => { close(); onOk(); };
     $('#mCancel').focus();
   }
 
@@ -370,9 +438,31 @@
     rd.readAsText(f);
   }
 
+  /* ---------- 移動ボタン ---------- */
+  const nav = $('#nav');
+  nav.addEventListener('click', e => {
+    const b = e.target.closest('[data-go]'); if (!b) return;
+    const t = b.dataset.go === 'top' ? null : $('#' + b.dataset.go);
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!t) window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
+    else t.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  });
+  const navMark = () => {
+    const ids = ['sec-top', 'banksSec', 'sec-variable', 'sec-fixed', 'sec-settings'];
+    let cur = 'sec-top';
+    for (const id of ids) { const el = document.getElementById(id); if (el && el.getBoundingClientRect().top < window.innerHeight * 0.35) cur = id; }
+    if (cur === 'sec-top') cur = 'banksSec';
+    nav.querySelectorAll('[data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === cur || (cur === 'banksSec' && b.dataset.go === 'top')));
+  };
+  window.addEventListener('scroll', () => { cancelAnimationFrame(navMark._r); navMark._r = requestAnimationFrame(navMark); }, { passive: true });
+  // 入力中はキーボードと重ならないよう隠す
+  document.addEventListener('focusin', e => { if (e.target.matches('input,select')) document.body.classList.add('typing'); });
+  document.addEventListener('focusout', () => setTimeout(() => { if (!document.activeElement || !document.activeElement.matches('input,select')) document.body.classList.remove('typing'); }, 50));
+
   /* ---------- 起動 ---------- */
   load();
   renderAll();
+  navMark();
   if (state) $('#saved').textContent = '保存済み';
   // 日付が変わったら確認日と集計を更新（入力中は邪魔しない）
   const tick = () => { if (keyOf(today()) !== todayKey && !(document.activeElement && document.activeElement.matches('input,select'))) renderKeep(); };
