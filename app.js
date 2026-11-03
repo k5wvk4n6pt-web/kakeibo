@@ -42,10 +42,10 @@
     return Number(t);
   }
 
-  /** 更新日時の表示（日付だけの値はExcelから引き継いだ日付） */
+  /** 更新日時の表示（日付だけの値は取り込んだデータの日付） */
   function stampText(v) {
     if (!v) return '更新：—';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) { const [y, m, d] = v.split('-').map(Number); return '更新：' + m + '/' + d + '（Excel）'; }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) { const [y, m, d] = v.split('-').map(Number); return '更新：' + m + '/' + d + '（取り込み）'; }
     const t = new Date(v); if (isNaN(t)) return '更新：—';
     const y = t.getFullYear() !== new Date().getFullYear() ? t.getFullYear() + '/' : '';
     return '更新：' + y + (t.getMonth() + 1) + '/' + t.getDate() + ' ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
@@ -88,14 +88,14 @@
       return o;
     };
     const out = {
-      app: 'kakeibo', version: 1, source: d.source || '',
+      app: 'kakeibo', version: 1, source: d.source || '', sample: !!d.sample,
       accounts: d.accounts.map(String),
       variable: d.variable.map(x => item(x, false)),
       fixed: d.fixed.map(x => item(x, true)),
       balances: {},
       hiddenAccounts: Array.isArray(d.hiddenAccounts) ? d.hiddenAccounts.map(String).filter(a => d.accounts.map(String).includes(a)) : [],
       income: Array.isArray(d.income) && d.income.length ? d.income.map(i => ({ id: i.id || uid('i'), name: String(i.name), day: i.day, amount: i.amount == null ? null : Number(i.amount), hidden: !!i.hidden, shift: validShift(i.shift, 'before') }))
-        : [{ id: 'i1', name: '直樹', day: 25, amount: null }, { id: 'i2', name: '寿美', day: 15, amount: null }]
+        : []
     };
     for (const a of out.accounts) {
       const b = (d.balances || {})[a] || {};
@@ -115,7 +115,8 @@
     main.innerHTML = page === 'variable' ? listHTML('variable', '変動費', '毎月の金額をここで入力します。')
       : page === 'fixed' ? listHTML('fixed', '固定費', '金額・引落日・口座が変わった時だけ変更します。')
       : page === 'settings' ? settingsHTML()
-      : backupNoticeHTML() + summaryHTML(r) + banksHTML(r);
+      : sampleBannerHTML() + (needsSetup() ? setupGuideHTML() : backupNoticeHTML()) + summaryHTML(r) + banksHTML(r) +
+        '<p class="note">表示される金額と日付は、登録した内容から計算した目安です。実際の引落日・金額は金融機関やカード会社の案内で確認してください。</p>';
     $('#nav').querySelectorAll('[data-page]').forEach(b => { const on = b.dataset.page === page; b.classList.toggle('on', on); b.setAttribute('aria-current', on ? 'page' : 'false'); });
     bindAll();
     if (typeof syncTyping === 'function') syncTyping();
@@ -145,11 +146,57 @@
   function welcomeHTML() {
     return '<section class="welcome">' +
       '<h2>はじめに</h2>' +
-      '<p>家計データはこの端末の中だけに保存します。最初に、Excelから作った初期データ（<b>家計データ_初期.json</b>）を読み込んでください。</p>' +
-      '<ol><li>初期データのファイルを「ファイル」アプリに保存</li><li>下のボタンからそのファイルを選ぶ</li><li>内容を確認して「読み込む」</li></ol>' +
-      '<label class="fileBtn primary">初期データ・バックアップを読み込む<input type="file" id="restoreFile" accept=".json,application/json"></label>' +
-      '<p class="note">バックアップから戻すときも同じボタンを使います。</p></section>';
+      '<p>口座ごとに「次の締め日（毎月10日）までに、いくら入れておけばよいか」を計算するアプリです。給料日や引落日が休日に当たる場合のずれも計算します。</p>' +
+      '<p class="sub" style="margin:0">入力した内容はこの端末の中だけに保存され、外部には送信しません。ログインも不要です。</p>' +
+      '<div class="btnrow col"><button class="primary" data-act="start-empty">空の状態ではじめる</button>' +
+      '<button data-act="start-sample">サンプルデータで試してみる</button>' +
+      '<label class="fileBtn">バックアップから復元<input type="file" id="restoreFile" accept=".json,application/json"></label></div>' +
+      '<p class="note">iPhoneでは、Safariの共有ボタンから「ホーム画面に追加」して、ホーム画面のアイコンから使うのがおすすめです（Safariとホーム画面のアプリは、データの保存場所が別になります）。</p>' +
+      '<button class="ghost small" data-act="help">使い方を見る</button></section>';
   }
+
+  function emptyState() { return { app: 'kakeibo', version: 1, source: '', accounts: [], variable: [], fixed: [], balances: {}, hiddenAccounts: [], income: [] }; }
+
+  /** 架空のサンプル（人名・実在の口座名は使わない） */
+  function sampleState() {
+    const now = new Date().toISOString();
+    const v = (name, day, account, amount) => ({ id: uid('v'), name, day, account, amount, memo: '', updatedAt: now, hidden: false, shift: 'after' });
+    const f = (name, day, account, amount, end) => ({ id: uid('f'), name, day, account, amount, end: end || null, memo: '', updatedAt: now, hidden: false, shift: 'after' });
+    const A = '生活費口座', B = 'カード引落口座', L = 'ローン口座', M = '現金';
+    const d = { app: 'kakeibo', version: 1, source: 'サンプル', sample: true, accounts: [A, B, L, M], hiddenAccounts: [],
+      variable: [v('クレジットカードA', 27, B, 48000), v('クレジットカードB', 10, B, 23500), v('電気代', 26, A, 9800), v('ガス代', 26, A, 5200), v('水道代', 'end', A, 0)],
+      fixed: [f('家族のこづかい', 25, M, 30000), f('住宅ローン', 27, L, 85000, '2045-03'), f('携帯電話', 26, A, 6800), f('生命保険', 27, A, 12000), f('習い事', 5, A, 8000), f('家電の分割払い', 1, B, 4500, '2027-06')],
+      balances: {}, income: [{ id: uid('i'), name: '給料', day: 25, amount: 280000, hidden: false, shift: 'before' }, { id: uid('i'), name: '児童手当', day: 10, amount: null, hidden: false, shift: 'before' }] };
+    d.balances[A] = { amount: 40000, updatedAt: now }; d.balances[B] = { amount: 60000, updatedAt: now }; d.balances[L] = { amount: 90000, updatedAt: now }; d.balances[M] = { amount: null, updatedAt: null };
+    return d;
+  }
+  function sampleBannerHTML() {
+    if (!state.sample) return '';
+    return '<div class="notice"><div><b>サンプルデータを表示しています。</b><br>口座名や金額はすべて架空です。自由に触って試してみてください。</div>' +
+      '<div class="btnrow"><button class="primary" data-act="sample-clear">サンプルを消して自分のデータではじめる</button></div></div>';
+  }
+  function needsSetup() { return !state.sample && (state.accounts.length === 0 || state.variable.length + state.fixed.length === 0); }
+  function setupGuideHTML() {
+    const hasAcc = state.accounts.length > 0, hasItem = state.variable.length + state.fixed.length > 0;
+    const step = (done, n, title, sub, btn, act) => '<li class="' + (done ? 'done' : '') + '"><span class="stepn">' + (done ? '✓' : n) + '</span><span class="stept"><b>' + title + '</b><small>' + sub + '</small></span>' + (btn ? '<button class="small' + (done ? '' : ' primary') + '" data-act="' + act + '">' + btn + '</button>' : '') + '</li>';
+    return '<section class="guide"><h2>はじめの設定</h2><ol>' +
+      step(hasAcc, 1, '口座を登録', '引落に使う銀行口座など', '登録する', 'go-acc') +
+      step(hasItem, 2, '支出を登録', '毎月の引落（カード・ローン・公共料金など）', '登録する', 'go-out') +
+      step(state.income.length > 0, 3, '収入を登録（任意）', '給料日などの予定を表示します', '登録する', 'go-in') +
+      step(false, 4, '口座の残高を入力', 'このページの各口座に入力すると、不足と余りが出ます', '', '') +
+      '</ol></section>';
+  }
+
+  function helpHTML() {
+    return '<div class="help">' +
+      '<h3>できること</h3><p>登録した毎月の引落をもとに、口座ごとに「締め日までに必要な金額」を計算します。残高を入力すると、不足している口座と余っている口座がわかります。</p>' +
+      '<h3>締め日と期間</h3><p>締め日は毎月10日です。10日が休日なら翌営業日まで延ばします。確認日（今日）から次の締め日までの引落で、不足と余りを判定します。締め日の後から月末までの分は「締め後」として参考に表示します。</p>' +
+      '<h3>休日のずれ</h3><p>土日・祝日・年末年始（12/31〜1/3）に当たる日は、項目ごとに「後ろにずらす／前にずらす／ずらさない」を選べます。初期値は、支出が後ろ（翌営業日）、収入が前（前営業日）です。</p>' +
+      '<h3>非表示</h3><p>使わなくなった項目・口座・収入は非表示にできます。非表示にしたものは計算に含みません。</p>' +
+      '<h3>データの保存</h3><p>入力した内容はこの端末のブラウザの中だけに保存され、外部には送信しません。ブラウザのデータを消すと失われるので、「設定 → 保存」からバックアップを「ファイル」アプリなどに保存してください。</p>' +
+      '<h3>ご注意</h3><p>計算結果は目安です。実際の引落日・金額は、金融機関やカード会社の案内で確認してください。</p></div>';
+  }
+  function showHelp() { confirmSheet('使い方', helpHTML(), null, null); }
 
   function backupNoticeHTML() {
     const last = meta.lastBackupAt ? new Date(meta.lastBackupAt) : null;
@@ -313,7 +360,7 @@
     return '<div class="card form">' +
       '<div class="shead">支出を追加<span class="sub">追加した項目は「' + (kind === 'fixed' ? '固定費' : '変動費') + '」ページに表示され、すぐ計算に入ります</span></div>' +
       '<div class="seg small-seg">' + [['variable', '変動費'], ['fixed', '固定費']].map(k => '<button class="' + (k[0] === kind ? 'on' : '') + '" data-qkind="' + k[0] + '">' + k[1] + '</button>').join('') + '</div>' +
-      '<label>項目名<input class="text" id="qa-name" autocomplete="off" placeholder="例：楽天card寿美"></label>' +
+      '<label>項目名<input class="text" id="qa-name" autocomplete="off" placeholder="例：クレジットカード"></label>' +
       '<label>金額（わからなければ空欄）<input class="amount wide" id="qa-amt" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="未入力"></label>' +
       '<div class="two"><label>引落日' + daySelect('qa-day', day) + '</label>' +
       '<label>引落口座<select id="qa-acc" aria-label="引落口座">' + (acc ? '' : '<option value="" selected>選ぶ</option>') + accs.map(a => '<option' + (a === acc ? ' selected' : '') + '>' + esc(a) + '</option>').join('') + '</select></label></div>' +
@@ -462,7 +509,8 @@
       '<div class="sub">最後のバックアップ：' + last + '</div>' +
       '<div class="btnrow"><button class="primary" data-act="backup">バックアップを保存</button>' +
       '<label class="fileBtn">バックアップから復元<input type="file" id="restoreFile" accept=".json,application/json"></label></div>' +
-      '<p class="note">保存先で「“ファイル”に保存」を選んでください。復元すると、今の内容は確認のあと上書きされます。</p></section>';
+      '<p class="note">保存先で「“ファイル”に保存」を選んでください。復元すると、今の内容は確認のあと上書きされます。</p>' +
+      '<div class="danger-zone"><b>すべてのデータを消す</b><p class="sub" style="margin:0">口座・支出・収入・残高をすべて消して、最初の画面に戻ります。元に戻せないので、先にバックアップを保存してください。</p><button class="danger" data-act="wipe">すべてのデータを消す</button></div></section>';
   }
 
   /* ---------- 操作 ---------- */
@@ -525,6 +573,17 @@
     main.querySelectorAll('.orow [data-mv]').forEach(b => b.addEventListener('click', () => {
       const row = b.closest('.orow'); moveItem(row.dataset.group, row.dataset.key, Number(b.dataset.mv));
     }));
+    const go = (stab, kind) => { meta.page = 'settings'; meta.stab = stab; if (kind) meta.qkind = kind; meta.reorder = null; saveMeta(); renderAll(); window.scrollTo(0, 0); };
+    main.querySelectorAll('[data-act="go-acc"]').forEach(b => b.addEventListener('click', () => go('acc')));
+    main.querySelectorAll('[data-act="go-out"]').forEach(b => b.addEventListener('click', () => go('out')));
+    main.querySelectorAll('[data-act="go-in"]').forEach(b => b.addEventListener('click', () => go('in')));
+    main.querySelectorAll('[data-act="sample-clear"]').forEach(b => b.addEventListener('click', () => confirmSheet('サンプルを消しますか？', '<p class="sub" style="margin:0">サンプルの口座・支出・収入をすべて消して、空の状態からはじめます。</p>', '消してはじめる', () => {
+      state = emptyState(); meta.page = 'prep'; saveMeta(); save(); renderAll(); window.scrollTo(0, 0); toast('空の状態になりました');
+    }, true)));
+    main.querySelectorAll('[data-act="wipe"]').forEach(b => b.addEventListener('click', () => confirmSheet('すべてのデータを消しますか？', '<p class="flag" style="margin:0">口座・支出・収入・残高がすべて消え、元に戻せません。</p>', 'すべて消す', () => {
+      try { localStorage.removeItem(KEY); } catch (e) { /* 消せなくても画面は初期化する */ }
+      state = null; meta = { lastBackupAt: meta.lastBackupAt }; saveMeta(); renderAll(); window.scrollTo(0, 0); $('#saved').textContent = ''; toast('すべてのデータを消しました');
+    }, true)));
     bindSettings();
     bindRestore();
   }
@@ -535,7 +594,12 @@
       el.addEventListener('blur', () => { const v = parseAmount(el.value); if (!Number.isNaN(v)) el.value = yenTxt(v); });
     });
   }
-  function bindWelcome() { bindRestore(); }
+  function bindWelcome() {
+    bindRestore();
+    const se = main.querySelector('[data-act="start-empty"]'); if (se) se.addEventListener('click', () => { state = emptyState(); meta.page = 'prep'; saveMeta(); save(); renderAll(); });
+    const ss = main.querySelector('[data-act="start-sample"]'); if (ss) ss.addEventListener('click', () => { state = sampleState(); meta.page = 'prep'; saveMeta(); save(); renderAll(); toast('サンプルデータを表示しました'); });
+    main.querySelectorAll('[data-act="help"]').forEach(b => b.addEventListener('click', showHelp));
+  }
   function bindRestore() { const f = $('#restoreFile'); if (f) f.addEventListener('change', onRestoreFile); }
 
   /** 開いている編集欄とスクロール位置を保ったまま描き直す */
@@ -599,7 +663,7 @@
         '<dt>口座</dt><dd>' + d.accounts.length + '口座</dd></dl>' +
         (state ? '<p class="flag" style="margin:0">今アプリに入っている内容（変動費' + state.variable.length + '件・固定費' + state.fixed.length + '件、口座残高を含む）は上書きされ、元に戻せません。</p>' : '');
       confirmSheet(state ? 'このバックアップで上書きしますか？' : 'このデータを読み込みますか？', body, state ? '上書きして復元' : '読み込む', () => {
-        state = d; save(); renderAll(); window.scrollTo(0, 0); toast('読み込みました');
+        state = d; meta.page = 'prep'; saveMeta(); save(); renderAll(); window.scrollTo(0, 0); toast('読み込みました');
       }, !!state);
     };
     rd.onerror = () => toast('ファイルを読めませんでした');
@@ -631,6 +695,8 @@
   document.addEventListener('focusout', () => setTimeout(syncTyping, 120));
   window.addEventListener('focus', () => syncTyping());
   window.addEventListener('pageshow', () => syncTyping());
+
+  $('#helpBtn').addEventListener('click', showHelp);
 
   /* ---------- 起動 ---------- */
   load();
