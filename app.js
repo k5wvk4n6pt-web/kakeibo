@@ -146,19 +146,19 @@
 
   function shortboxHTML(r) {
     let cls = '', main1, sub;
-    if (r.balanceMissing === r.activeCount && r.activeCount > 0) {
+    if (r.balanceMissing === r.dueCount && r.dueCount > 0) {
       cls = 'none'; main1 = '<span>残高を入力すると不足額が出ます</span>'; sub = '';
     } else if (r.shortfallTotal > 0) {
-      main1 = '<span>不足の合計<small>入金が必要</small></span><span class="big num">' + yen(r.shortfallTotal) + '</span>';
+      main1 = '<span>不足の合計<small>' + md(r.closing) + '締めまでに入金が必要</small></span><span class="big num">' + yen(r.shortfallTotal) + '</span>';
     } else {
-      cls = 'ok'; main1 = '<span>不足はありません<small>残高を入力した口座</small></span><span class="big num">0<span class="yen">円</span></span>';
+      cls = 'ok'; main1 = '<span>不足はありません<small>' + md(r.closing) + '締め・残高を入力した口座</small></span><span class="big num">0<span class="yen">円</span></span>';
     }
-    const miss = r.balanceMissing > 0 && r.balanceMissing < r.activeCount ? '<div class="flag">残高未入力：' + r.balanceMissing + '口座（不足の合計に含みません）</div>' : '';
+    const miss = r.balanceMissing > 0 && r.balanceMissing < r.dueCount ? '<div class="flag">残高未入力：' + r.balanceMissing + '口座（不足の合計に含みません）</div>' : '';
     return '<div id="shortbox"><div class="shortbox ' + cls + '">' + main1 + '</div>' + miss + '</div>';
   }
 
   function summaryHTML(r) {
-    const per = r.windows.map(w => '<div class="period"><span class="lab">' + w.label + 'に必要</span><span class="rng">' + md(w.from) + '〜' + md(w.to) + '</span><span class="val num" data-sum="' + w.key + '">' + yen(r.totals[w.key]) + '</span></div>').join('');
+    const per = r.windows.map(w => '<div class="period' + (w.inClose ? '' : ' after') + '"><span class="lab">' + w.label + 'に必要' + (w.inClose ? '' : '<span class="tag">締め後</span>') + '</span><span class="rng">' + md(w.from) + '〜' + md(w.to) + '</span><span class="val num" data-sum="' + w.key + '">' + yen(r.totals[w.key]) + '</span></div>').join('');
     const inc = r.income.map(i => '<div class="income-row"><span class="who">' + esc(i.name) + '</span><span class="when">' + (i.next ? mdw(i.next) + ' 予定' : '') + '</span>' +
       '<input class="amount' + (i.amount == null ? ' empty' : '') + '" inputmode="numeric" enterkeyhint="done" autocomplete="off" id="inc-' + esc(i.id) + '" data-inc="' + esc(i.id) + '" value="' + yenTxt(i.amount) + '" placeholder="金額（任意）" aria-label="' + esc(i.name) + 'の収入予定額"></div>').join('');
     return '<section class="summary" aria-label="要約">' +
@@ -169,6 +169,7 @@
   function nextHTML(b) { return b.next ? '次の引落 <span class="' + (isWeekend(b.next) ? 'wkend' : '') + '">' + mdw(b.next) + '</span>' : '予定なし'; }
 
   function statusHTML(b) {
+    if (!b.dueActive) return '<span class="pill ok" data-status>締めまで引落なし</span>';
     if (b.balance == null) return '<span class="pill none" data-status>残高未入力</span>';
     if (b.shortfall > 0) return '<span class="pill short num" data-status>不足 ' + nf.format(b.shortfall) + '円</span>';
     return '<span class="pill ok num" data-status>足りています（余り ' + nf.format(b.surplus) + '円）</span>';
@@ -187,7 +188,7 @@
     const active = r.banks.filter(b => b.active), idle = r.banks.filter(b => !b.active);
     const cards = active.map(b => '<article class="bank' + (b.shortfall > 0 ? ' is-short' : '') + '" data-bank="' + esc(b.name) + '">' +
       '<div class="bank-head"><span class="bank-name">' + esc(b.name) + '</span><span class="next">' + nextHTML(b) + '</span></div>' +
-      '<div class="bank-amts">' + r.windows.map(w => '<div><span class="k">' + w.label + '</span><span class="v num" data-bsum="' + w.key + '">' + yen(b.sums[w.key]) + '</span></div>').join('') + '</div>' +
+      '<div class="bank-amts">' + r.windows.map(w => '<div class="' + (w.inClose ? '' : 'after') + '"><span class="k">' + w.label + (w.inClose ? '' : '（締め後）') + '</span><span class="v num" data-bsum="' + w.key + '">' + yen(b.sums[w.key]) + '</span></div>').join('') + '</div>' +
       (b.unentered ? '<div class="flag">金額未入力の引落が' + b.unentered + '件あります（0円として数えていません）</div>' : '') +
       '<div class="bank-foot"><label for="bal-' + esc(b.name) + '">現在残高</label><input class="amount' + (b.balance == null ? ' empty' : '') + '" inputmode="numeric" enterkeyhint="done" autocomplete="off" id="bal-' + esc(b.name) + '" data-bal="' + esc(b.name) + '" value="' + yenTxt(b.balance) + '" placeholder="未入力">' + statusHTML(b) + '</div>' +
       '<details class="lines"><summary>引落の内訳</summary><div class="line-list">' + linesInner(b, r.windows) + '</div></details>' +

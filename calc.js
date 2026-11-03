@@ -29,19 +29,20 @@
    * 集計期間（重複なし・確認日から連続）
    *  確認日が1〜10日 : ①確認日〜当月10日  ②当月11日〜月末
    *  確認日が11日以降: ①確認日〜当月末    ②翌月1日〜翌月10日
+   * 過不足は10日締め：確認日から次の10日（締め日）までの引落で判定する（inClose）
    */
   function windows(T) {
     const ld = lastDay(T.y, T.m);
     if (T.d <= 10) {
       return [
-        { key: 'w10', label: '10日まで', from: T, to: { y: T.y, m: T.m, d: 10 } },
-        { key: 'wEnd', label: '月末まで', from: { y: T.y, m: T.m, d: 11 }, to: { y: T.y, m: T.m, d: ld } }
+        { key: 'w10', label: '10日まで', from: T, to: { y: T.y, m: T.m, d: 10 }, inClose: true },
+        { key: 'wEnd', label: '月末まで', from: { y: T.y, m: T.m, d: 11 }, to: { y: T.y, m: T.m, d: ld }, inClose: false }
       ];
     }
     const n = addMonth(T.y, T.m, 1);
     return [
-      { key: 'wEnd', label: '月末まで', from: T, to: { y: T.y, m: T.m, d: ld } },
-      { key: 'w10', label: '翌10日まで', from: { y: n.y, m: n.m, d: 1 }, to: { y: n.y, m: n.m, d: 10 } }
+      { key: 'wEnd', label: '月末まで', from: T, to: { y: T.y, m: T.m, d: ld }, inClose: true },
+      { key: 'w10', label: '翌10日まで', from: { y: n.y, m: n.m, d: 1 }, to: { y: n.y, m: n.m, d: 10 }, inClose: true }
     ];
   }
 
@@ -77,13 +78,13 @@
       .concat((data.fixed || []).map(x => Object.assign({ kind: '固定費' }, x)));
     const banks = (data.accounts || []).map(name => {
       const bal = (data.balances || {})[name] || {};
-      const b = { name, sums: {}, lines: {}, unentered: 0, next: null, balance: bal.amount == null ? null : Number(bal.amount), balanceUpdatedAt: bal.updatedAt || null };
+      const b = { name, sums: {}, lines: {}, unentered: 0, unenteredDue: 0, next: null, balance: bal.amount == null ? null : Number(bal.amount), balanceUpdatedAt: bal.updatedAt || null };
       for (const w of W) { b.sums[w.key] = 0; b.lines[w.key] = []; }
       for (const it of items) {
         if (it.account !== name) continue;
         for (const w of W) {
           for (const o of occurrencesIn(it, w.from, w.to)) {
-            if (it.amount == null) b.unentered++;
+            if (it.amount == null) { b.unentered++; if (w.inClose) b.unenteredDue++; }
             else b.sums[w.key] += Number(it.amount);
             b.lines[w.key].push({ date: o, name: it.name, amount: it.amount, kind: it.kind });
           }
@@ -95,20 +96,25 @@
       }
       for (const w of W) b.lines[w.key].sort((a, c) => serial(a.date) - serial(c.date));
       b.total = W.reduce((s, w) => s + b.sums[w.key], 0);
-      b.shortfall = b.balance == null ? null : Math.max(0, b.total - b.balance);
-      b.surplus = b.balance == null ? null : Math.max(0, b.balance - b.total);
+      b.due = W.filter(w => w.inClose).reduce((s, w) => s + b.sums[w.key], 0);
+      b.shortfall = b.balance == null ? null : Math.max(0, b.due - b.balance);
+      b.surplus = b.balance == null ? null : Math.max(0, b.balance - b.due);
       b.active = b.total > 0 || b.unentered > 0;
+      b.dueActive = b.due > 0 || b.unenteredDue > 0;
       return b;
     });
     const totals = {};
     for (const w of W) totals[w.key] = banks.reduce((s, b) => s + b.sums[w.key], 0);
-    const entered = banks.filter(b => b.active && b.balance != null);
+    const entered = banks.filter(b => b.dueActive && b.balance != null);
+    const closeWin = W.find(w => w.key === 'w10');
     return {
-      T, windows: W, banks, totals,
+      T, windows: W, banks, totals, closing: closeWin.to,
+      dueTotal: banks.reduce((s, b) => s + b.due, 0),
+      dueCount: banks.filter(b => b.dueActive).length,
       grandTotal: banks.reduce((s, b) => s + b.total, 0),
       shortfallTotal: entered.reduce((s, b) => s + b.shortfall, 0),
       activeCount: banks.filter(b => b.active).length,
-      balanceMissing: banks.filter(b => b.active && b.balance == null).length,
+      balanceMissing: banks.filter(b => b.dueActive && b.balance == null).length,
       income: (data.income || []).map(i => Object.assign({}, i, { next: nextDate(i, T) }))
         .sort((a, c) => serial(a.next) - serial(c.next))
     };
