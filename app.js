@@ -221,6 +221,11 @@
   function listHTML(kind, title, lead) {
     const T = today();
     const visible = state[kind].filter(x => !x.hidden), hiddenItems = state[kind].filter(x => x.hidden);
+    if (meta.reorder === kind) {
+      return '<section id="sec-' + kind + '" aria-label="' + title + '">' + headHTML(title, '表示 ' + visible.length + '件', kind) +
+        '<p class="sub" style="margin:-4px 0 10px">↑↓で順番を変えます。終わったら「完了」を押してください。</p>' +
+        '<div class="list">' + orderRows(kind, visible.map(it => ({ key: it.id, label: it.name, sub: dayLabel(it.day) + '・' + (it.account || '口座なし') + '・' + (it.amount == null ? '未入力' : nf.format(it.amount) + '円') }))) + '</div></section>';
+    }
     const rows = visible.map(it => {
       const ended = kind === 'fixed' && it.end && !C.activeIn(it, T.y, T.m);
       return '<div class="row' + (ended ? ' ended' : '') + '" data-kind="' + kind + '" data-id="' + esc(it.id) + '">' +
@@ -240,7 +245,7 @@
     const hid = hiddenItems.length ? '<details class="hiddenbox"' + (meta['open-' + kind] ? ' open' : '') + ' data-kind="' + kind + '"><summary>非表示の項目 ' + hiddenItems.length + '件（計算に含みません）</summary>' +
       hiddenItems.map(it => '<div class="hrow" data-kind="' + kind + '" data-id="' + esc(it.id) + '"><span class="row-name">' + esc(it.name) + '<span class="sub">' + dayLabel(it.day) + '・' + esc(it.account || '口座なし') + '・' + (it.amount == null ? '未入力' : nf.format(it.amount) + '円') + '</span></span><button class="small" data-act="unhide">表示する</button></div>').join('') +
       '</details>' : '';
-    return '<section id="sec-' + kind + '" aria-label="' + title + '"><div class="section-head"><h2>' + title + '</h2><span class="sub">表示 ' + visible.length + '件</span></div>' +
+    return '<section id="sec-' + kind + '" aria-label="' + title + '">' + headHTML(title, '表示 ' + visible.length + '件', kind) +
       '<p class="sub" style="margin:-4px 0 10px">' + lead + '</p>' +
       '<div class="list">' + rows + '<div class="add"><button class="ghost" data-act="add" data-kind="' + kind + '">＋ ' + title + 'を追加</button></div></div>' + hid + '</section>';
   }
@@ -248,29 +253,146 @@
   function hiddenAcc() { return state.hiddenAccounts || (state.hiddenAccounts = []); }
   function hideBtn(isHidden, act) { return '<button class="small' + (isHidden ? ' primary' : '') + '" data-act="' + act + '">' + (isHidden ? '表示する' : '非表示') + '</button>'; }
 
+  /* 見出し＋並び替えボタン */
+  function headHTML(title, note, group) {
+    const on = meta.reorder === group;
+    return '<div class="section-head"><h2>' + title + '</h2><span class="head-right"><span class="sub">' + note + '</span>' +
+      (group ? '<button class="small' + (on ? ' primary' : '') + '" data-reorder="' + group + '">' + (on ? '完了' : '並び替え') + '</button>' : '') + '</span></div>';
+  }
+  function orderRows(group, list) {
+    return list.map((x, i) => '<div class="orow" data-group="' + group + '" data-key="' + esc(x.key) + '">' +
+      '<span class="oname">' + esc(x.label) + (x.sub ? '<small>' + esc(x.sub) + '</small>' : '') + '</span>' +
+      '<button class="small mv" data-mv="-1" aria-label="' + esc(x.label) + 'を上へ"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
+      '<button class="small mv" data-mv="1" aria-label="' + esc(x.label) + 'を下へ"' + (i === list.length - 1 ? ' disabled' : '') + '>↓</button></div>').join('');
+  }
+  /** 隣の（表示されている）項目と入れ替える */
+  function moveItem(group, key, dir) {
+    let arr, keyOf, vis;
+    if (group === 'accounts') { arr = state.accounts; keyOf = x => x; vis = arr.slice(); }
+    else if (group === 'income') { arr = state.income; keyOf = x => x.id; vis = arr.slice(); }
+    else { arr = state[group]; keyOf = x => x.id; vis = arr.filter(x => !x.hidden); }
+    const i = vis.findIndex(x => keyOf(x) === key), j = i + dir;
+    if (i < 0 || j < 0 || j >= vis.length) return;
+    const ai = arr.indexOf(vis[i]), bi = arr.indexOf(vis[j]);
+    [arr[ai], arr[bi]] = [arr[bi], arr[ai]];
+    save();
+    renderKeep();
+    const row = main.querySelector('.orow[data-group="' + group + '"][data-key="' + CSS.escape(key) + '"]');
+    if (row) { row.scrollIntoView({ block: 'nearest' }); const btn = row.querySelector('[data-mv="' + dir + '"]'); if (btn && !btn.disabled) btn.focus({ preventScroll: true }); }
+  }
+
+  const STABS = [['out', '支出'], ['in', '収入'], ['acc', '口座'], ['backup', '保存']];
   function settingsHTML() {
+    const st = STABS.some(t => t[0] === meta.stab) ? meta.stab : 'out';
+    const seg = '<div class="seg" role="tablist">' + STABS.map(t => '<button role="tab" aria-selected="' + (t[0] === st) + '" class="' + (t[0] === st ? 'on' : '') + '" data-stab="' + t[0] + '">' + t[1] + '</button>').join('') + '</div>';
+    let body = '';
+    if (st === 'out') body = outHTML();
+    else if (st === 'in') body = inHTML();
+    else if (st === 'acc') body = accHTML();
+    else body = backupHTML();
+    return '<section id="sec-settings" aria-label="設定"><div class="section-head"><h2>設定</h2></div>' + seg + '<div class="stab-body">' + body + '</div></section>';
+  }
+
+  function visibleAccounts() { return state.accounts.filter(a => !hiddenAcc().includes(a)); }
+
+  function outHTML() {
+    const kind = meta.qkind === 'fixed' ? 'fixed' : 'variable';
+    const accs = visibleAccounts();
+    const acc = accs.includes(meta.qacc) ? meta.qacc : '';
+    const day = meta.qday === 'end' || (Number(meta.qday) >= 1 && Number(meta.qday) <= 31) ? (meta.qday === 'end' ? 'end' : Number(meta.qday)) : 27;
+    return '<div class="card form">' +
+      '<div class="shead">支出を追加<span class="sub">追加した項目は「' + (kind === 'fixed' ? '固定費' : '変動費') + '」ページに表示され、すぐ計算に入ります</span></div>' +
+      '<div class="seg small-seg">' + [['variable', '変動費'], ['fixed', '固定費']].map(k => '<button class="' + (k[0] === kind ? 'on' : '') + '" data-qkind="' + k[0] + '">' + k[1] + '</button>').join('') + '</div>' +
+      '<label>項目名<input class="text" id="qa-name" autocomplete="off" placeholder="例：楽天card寿美"></label>' +
+      '<label>金額（わからなければ空欄）<input class="amount wide" id="qa-amt" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="未入力"></label>' +
+      '<div class="two"><label>引落日' + daySelect('qa-day', day) + '</label>' +
+      '<label>引落口座<select id="qa-acc" aria-label="引落口座">' + (acc ? '' : '<option value="" selected>選ぶ</option>') + accs.map(a => '<option' + (a === acc ? ' selected' : '') + '>' + esc(a) + '</option>').join('') + '</select></label></div>' +
+      (kind === 'fixed' ? '<label>終了月（ローンなど。なければ空欄）<input class="text" type="month" id="qa-end"></label>' : '') +
+      '<button class="primary" data-act="qadd">' + (kind === 'fixed' ? '固定費' : '変動費') + 'に追加</button>' +
+      (meta.qlast ? '<p class="note" id="qa-last">追加しました：' + esc(meta.qlast) + '</p>' : '') +
+      '</div>';
+  }
+
+  function inHTML() {
+    const on = meta.reorder === 'income';
+    const list = on ? orderRows('income', state.income.map(i => ({ key: i.id, label: i.name, sub: dayLabel(i.day) + (i.hidden ? '・非表示' : '') }))) :
+      state.income.map(i => '<div class="irow' + (i.hidden ? ' is-hidden' : '') + '" data-inc-id="' + esc(i.id) + '">' +
+        '<div class="irow-top"><input class="text" id="incname-' + esc(i.id) + '" value="' + esc(i.name) + '" aria-label="収入の名前">' +
+        '<input class="amount" inputmode="numeric" enterkeyhint="done" autocomplete="off" id="incamt-' + esc(i.id) + '" data-inc="' + esc(i.id) + '" value="' + yenTxt(i.amount) + '" placeholder="金額" aria-label="' + esc(i.name) + 'の金額"></div>' +
+        '<div class="irow-bot">' + daySelect('incday-' + esc(i.id), i.day) + '<span class="sub">に入金</span><span class="grow"></span>' + hideBtn(!!i.hidden, 'inchide') + '<button class="danger small" data-act="incdel">削除</button></div></div>').join('');
+    return '<div class="card">' + '<div class="pad">' + headHTML('収入', state.income.length + '件', 'income') + '<p class="sub" style="margin:0">未入金の収入は口座残高に足しません。非表示にすると準備ページに出ません。</p></div>' +
+      list + (on ? '' :
+      '<div class="form addform"><div class="shead">収入を追加</div>' +
+      '<label>名前<input class="text" id="inc-new-name" autocomplete="off" placeholder="例：児童手当"></label>' +
+      '<div class="two"><label>入金日' + daySelect('inc-new-day', 25) + '</label><label>金額（任意）<input class="amount wide" id="inc-new-amt" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="未入力"></label></div>' +
+      '<button class="primary" data-act="incadd">収入に追加</button></div>') + '</div>';
+  }
+
+  function accHTML() {
+    const on = meta.reorder === 'accounts';
     const used = name => state.variable.concat(state.fixed).filter(x => x.account === name).length;
-    const accRows = state.accounts.map((a, i) => '<div class="srow' + (hiddenAcc().includes(a) ? ' is-hidden' : '') + '" data-acc-i="' + i + '">' +
-      '<input class="text" id="accname-' + i + '" value="' + esc(a) + '" aria-label="口座名">' +
-      '<span class="sub nowrap">' + used(a) + '件</span>' +
-      hideBtn(hiddenAcc().includes(a), 'acchide') +
-      '<button class="danger small" data-act="accdel">削除</button></div>').join('');
-    const incRows = state.income.map(i => '<div class="srow' + (i.hidden ? ' is-hidden' : '') + '" data-inc-id="' + esc(i.id) + '">' +
-      '<input class="text" id="incname-' + esc(i.id) + '" value="' + esc(i.name) + '" aria-label="収入の名前">' +
-      daySelect('incday-' + esc(i.id), i.day) +
-      hideBtn(!!i.hidden, 'inchide') +
-      '<button class="danger small" data-act="incdel">削除</button></div>').join('');
-    return '<section id="sec-settings" aria-label="口座と収入の設定"><div class="section-head"><h2>口座と収入の設定</h2></div>' +
-      '<div class="list settings">' +
-      '<div class="shead">口座<span class="sub">名前を変えると、その口座の引落もまとめて変わります。非表示の口座は準備ページに出ず、計算にも含みません</span></div>' + accRows +
-      '<div class="srow add-row"><input class="text" id="accnew" placeholder="新しい口座名" aria-label="新しい口座名"><button class="small" data-act="accadd">追加</button></div>' +
-      '<div class="shead">収入<span class="sub">名前と入金日。金額は準備ページで入力します</span></div>' + incRows +
-      '<div class="srow add-row"><input class="text" id="incnew" placeholder="新しい収入の名前" aria-label="新しい収入の名前"><button class="small" data-act="incadd">追加</button></div>' +
-      '</div></section>';
+    const list = on ? orderRows('accounts', state.accounts.map(a => ({ key: a, label: a, sub: used(a) + '件' + (hiddenAcc().includes(a) ? '・非表示' : '') }))) :
+      state.accounts.map((a, i) => '<div class="srow' + (hiddenAcc().includes(a) ? ' is-hidden' : '') + '" data-acc-i="' + i + '">' +
+        '<input class="text" id="accname-' + i + '" value="' + esc(a) + '" aria-label="口座名">' +
+        '<span class="sub nowrap">' + used(a) + '件</span>' +
+        hideBtn(hiddenAcc().includes(a), 'acchide') +
+        '<button class="danger small" data-act="accdel">削除</button></div>').join('');
+    return '<div class="card">' + '<div class="pad">' + headHTML('口座', state.accounts.length + '口座', 'accounts') +
+      '<p class="sub" style="margin:0">並び順は準備ページの銀行の順番になります。名前を変えると、その口座の引落もまとめて変わります。</p></div>' +
+      list + (on ? '' : '<div class="srow add-row"><input class="text" id="accnew" placeholder="新しい口座名" aria-label="新しい口座名"><button class="small" data-act="accadd">追加</button></div>') + '</div>';
   }
 
   function bindSettings() {
-    if (!$('#sec-settings')) return;
+    main.querySelectorAll('[data-stab]').forEach(b => b.addEventListener('click', () => { meta.stab = b.dataset.stab; meta.reorder = null; saveMeta(); renderAll(); window.scrollTo(0, 0); }));
+    // 支出の追加
+    main.querySelectorAll('[data-qkind]').forEach(b => b.addEventListener('click', () => { meta.qkind = b.dataset.qkind; saveMeta(); keepForm(() => renderKeep()); }));
+    const qadd = main.querySelector('[data-act="qadd"]');
+    if (qadd) {
+      const amt = $('#qa-amt');
+      amt.addEventListener('blur', () => { const v = parseAmount(amt.value); if (!Number.isNaN(v)) amt.value = yenTxt(v); });
+      $('#qa-day').addEventListener('change', e => { meta.qday = e.target.value === 'end' ? 'end' : Number(e.target.value); saveMeta(); });
+      $('#qa-acc').addEventListener('change', e => { meta.qacc = e.target.value; saveMeta(); });
+      qadd.addEventListener('click', () => {
+        const kind = meta.qkind === 'fixed' ? 'fixed' : 'variable';
+        const name = $('#qa-name').value.trim();
+        const v = parseAmount(amt.value);
+        const acc = $('#qa-acc').value;
+        const dv = $('#qa-day').value; const day = dv === 'end' ? 'end' : Number(dv);
+        if (!name) { toast('項目名を入力してください'); $('#qa-name').focus(); return; }
+        if (Number.isNaN(v)) { toast('金額は数字で入力してください'); amt.focus(); return; }
+        if (!acc) { toast('引落口座を選んでください'); return; }
+        const it = { id: uid(kind === 'fixed' ? 'f' : 'v'), name, day, account: acc, amount: v, memo: '', updatedAt: new Date().toISOString(), hidden: false };
+        if (kind === 'fixed') { const e = $('#qa-end'); it.end = e && e.value ? e.value : null; }
+        state[kind].push(it); save();
+        meta.qacc = acc; meta.qday = day;
+        meta.qlast = name + '（' + (kind === 'fixed' ? '固定費' : '変動費') + '・' + dayLabel(day) + '・' + acc + '・' + (v == null ? '金額未入力' : nf.format(v) + '円') + '）';
+        saveMeta(); renderKeep(); toast('「' + name + '」を追加しました');
+      });
+    }
+    // 収入
+    main.querySelectorAll('[data-inc-id]').forEach(row => {
+      const inc = state.income.find(x => x.id === row.dataset.incId);
+      row.querySelector('input.text').addEventListener('change', e => { const n = e.target.value.trim(); if (!n) { e.target.value = inc.name; return; } inc.name = n; save(); renderKeep(); });
+      row.querySelector('select').addEventListener('change', e => { inc.day = e.target.value === 'end' ? 'end' : Number(e.target.value); save(); renderKeep(); });
+      row.querySelector('[data-act="inchide"]').addEventListener('click', () => { inc.hidden = !inc.hidden; save(); renderKeep(); toast(inc.hidden ? '「' + inc.name + '」を非表示にしました' : '「' + inc.name + '」を表示しました'); });
+      row.querySelector('[data-act="incdel"]').addEventListener('click', () => confirmSheet('収入「' + inc.name + '」を削除しますか？', '', '削除する', () => {
+        state.income = state.income.filter(x => x.id !== inc.id); save(); renderKeep(); toast('削除しました');
+      }, true));
+    });
+    const incadd = main.querySelector('[data-act="incadd"]');
+    if (incadd) {
+      const amt = $('#inc-new-amt');
+      amt.addEventListener('blur', () => { const v = parseAmount(amt.value); if (!Number.isNaN(v)) amt.value = yenTxt(v); });
+      incadd.addEventListener('click', () => {
+        const n = $('#inc-new-name').value.trim(); const v = parseAmount(amt.value);
+        const dv = $('#inc-new-day').value;
+        if (!n) { toast('収入の名前を入力してください'); return; }
+        if (Number.isNaN(v)) { toast('金額は数字で入力してください'); return; }
+        state.income.push({ id: uid('i'), name: n, day: dv === 'end' ? 'end' : Number(dv), amount: v, hidden: false });
+        save(); renderKeep(); toast('「' + n + '」を追加しました');
+      });
+    }
+    // 口座
     main.querySelectorAll('[data-acc-i]').forEach(row => {
       const i = Number(row.dataset.accI); const old = state.accounts[i];
       row.querySelector('input').addEventListener('change', e => {
@@ -283,6 +405,7 @@
         for (const it of state.variable.concat(state.fixed)) if (it.account === old) { it.account = n; cnt++; }
         state.balances[n] = state.balances[old] || { amount: null, updatedAt: null }; delete state.balances[old];
         state.hiddenAccounts = hiddenAcc().map(a => a === old ? n : a);
+        if (meta.qacc === old) { meta.qacc = n; saveMeta(); }
         save(); renderKeep(); toast('「' + n + '」に変更しました（引落' + cnt + '件）');
       });
       row.querySelector('[data-act="acchide"]').addEventListener('click', () => {
@@ -301,27 +424,20 @@
         }, true);
       });
     });
-    const accAdd = () => {
-      const el = $('#accnew'); const n = el.value.trim();
+    const accadd = main.querySelector('[data-act="accadd"]');
+    if (accadd) accadd.addEventListener('click', () => {
+      const n = $('#accnew').value.trim();
       if (!n) { toast('口座名を入力してください'); return; }
       if (state.accounts.includes(n)) { toast('同じ名前の口座があります'); return; }
       state.accounts.push(n); state.balances[n] = { amount: null, updatedAt: null }; save(); renderKeep(); toast('「' + n + '」を追加しました');
-    };
-    main.querySelector('[data-act="accadd"]').addEventListener('click', accAdd);
-    main.querySelectorAll('[data-inc-id]').forEach(row => {
-      const inc = state.income.find(x => x.id === row.dataset.incId);
-      row.querySelector('input').addEventListener('change', e => { const n = e.target.value.trim(); if (!n) { e.target.value = inc.name; return; } inc.name = n; save(); renderKeep(); });
-      row.querySelector('select').addEventListener('change', e => { inc.day = e.target.value === 'end' ? 'end' : Number(e.target.value); save(); renderKeep(); });
-      row.querySelector('[data-act="inchide"]').addEventListener('click', () => { inc.hidden = !inc.hidden; save(); renderKeep(); toast(inc.hidden ? '「' + inc.name + '」を非表示にしました' : '「' + inc.name + '」を表示しました'); });
-      row.querySelector('[data-act="incdel"]').addEventListener('click', () => confirmSheet('収入「' + inc.name + '」を削除しますか？', '', '削除する', () => {
-        state.income = state.income.filter(x => x.id !== inc.id); save(); renderKeep(); toast('削除しました');
-      }, true));
     });
-    main.querySelector('[data-act="incadd"]').addEventListener('click', () => {
-      const el = $('#incnew'); const n = el.value.trim();
-      if (!n) { toast('収入の名前を入力してください'); return; }
-      state.income.push({ id: uid('i'), name: n, day: 25, amount: null }); save(); renderKeep(); toast('「' + n + '」を追加しました（入金日は25日。変更できます）');
-    });
+  }
+
+  /** 追加フォームの入力途中の内容を残したまま描き直す */
+  function keepForm(fn) {
+    const keep = {}; ['qa-name', 'qa-amt'].forEach(id => { const el = $('#' + id); if (el) keep[id] = el.value; });
+    fn();
+    Object.keys(keep).forEach(id => { const el = $('#' + id); if (el) el.value = keep[id]; });
   }
 
   function backupHTML() {
@@ -383,14 +499,16 @@
       el.addEventListener('blur', () => { const v = parseAmount(el.value); if (!Number.isNaN(v)) el.value = yenTxt(v); });
     });
     main.querySelectorAll('[data-act="add"]').forEach(btn => btn.addEventListener('click', () => {
-      const kind = btn.dataset.kind;
-      const it = { id: uid(kind === 'fixed' ? 'f' : 'v'), name: '新しい項目', day: 27, account: '', amount: null, memo: '', updatedAt: new Date().toISOString() };
-      if (kind === 'fixed') it.end = null;
-      state[kind].push(it); save(); renderAll();
-      const row = main.querySelector('.row[data-id="' + it.id + '"]');
-      if (row) { row.querySelector('[data-editor]').hidden = false; row.scrollIntoView({ block: 'center' }); }
+      meta.page = 'settings'; meta.stab = 'out'; meta.qkind = btn.dataset.kind; meta.reorder = null; saveMeta(); renderAll(); window.scrollTo(0, 0);
+      const nm = $('#qa-name'); if (nm) nm.focus();
     }));
     main.querySelectorAll('[data-act="backup"]').forEach(b => b.addEventListener('click', doBackup));
+    main.querySelectorAll('[data-reorder]').forEach(b => b.addEventListener('click', () => {
+      meta.reorder = meta.reorder === b.dataset.reorder ? null : b.dataset.reorder; saveMeta(); renderKeep();
+    }));
+    main.querySelectorAll('.orow [data-mv]').forEach(b => b.addEventListener('click', () => {
+      const row = b.closest('.orow'); moveItem(row.dataset.group, row.dataset.key, Number(b.dataset.mv));
+    }));
     bindSettings();
     bindRestore();
   }
@@ -475,7 +593,14 @@
   /* ---------- 移動ボタン ---------- */
   const PAGES = ['prep', 'variable', 'fixed', 'settings'];
   const TYPING = 'input:not([type="file"]):not([type="button"]), select, textarea';
+  // 指が触れている間は下のタブを出し入れしない（ボタンを押した瞬間にタブが重なるのを防ぐ）
+  let pointerDown = false;
+  document.addEventListener('pointerdown', () => { pointerDown = true; }, true);
+  const pointerEnd = () => { pointerDown = false; setTimeout(syncTyping, 120); };
+  document.addEventListener('pointerup', pointerEnd, true);
+  document.addEventListener('pointercancel', pointerEnd, true);
   function syncTyping() {
+    if (pointerDown) return;
     const a = document.activeElement;
     document.body.classList.toggle('typing', !!(a && a.isConnected && a !== document.body && a.matches(TYPING)));
   }
@@ -483,11 +608,11 @@
   nav.addEventListener('click', e => {
     const b = e.target.closest('[data-page]'); if (!b) return;
     if (meta.page === b.dataset.page) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-    meta.page = b.dataset.page; saveMeta(); renderAll(); window.scrollTo(0, 0);
+    meta.page = b.dataset.page; meta.reorder = null; saveMeta(); renderAll(); window.scrollTo(0, 0);
   });
   // 入力中はキーボードと重ならないよう隠す（ファイル選択は除く。描き直しで入力欄が消えた時も戻す）
   document.addEventListener('focusin', () => syncTyping());
-  document.addEventListener('focusout', () => setTimeout(syncTyping, 60));
+  document.addEventListener('focusout', () => setTimeout(syncTyping, 120));
   window.addEventListener('focus', () => syncTyping());
   window.addEventListener('pageshow', () => syncTyping());
 

@@ -183,6 +183,35 @@ section[id], #sec-top { scroll-margin-top: calc(env(safe-area-inset-top, 0px) + 
 .hrow { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--line); }
 .hrow .row-name { display: grid; color: var(--muted); font-weight: 600; }
 .hrow .row-name .sub { font-weight: 400; }
+.head-right { display: flex; align-items: center; gap: 10px; }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; background: var(--accent-soft); border-radius: 12px; padding: 4px; margin-bottom: 14px; }
+.seg button { border: 0; background: transparent; color: var(--accent); font-weight: 600; min-height: 42px; border-radius: 9px; padding: 6px 4px; }
+.seg button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 18%, transparent); }
+.small-seg { margin-bottom: 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.card .pad { padding: 14px 14px 10px; display: grid; gap: 4px; }
+.card .pad .section-head { margin-bottom: 0; }
+.card .pad h2 { font-size: 17px; }
+.form { padding: 14px; display: grid; gap: 12px; }
+.form label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.form .shead { padding: 0; }
+.form select { width: 100%; }
+.addform { border-top: 1px solid var(--line); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.two > * { min-width: 0; }
+input.amount.wide { width: 100%; }
+.irow { padding: 10px 14px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.irow-top, .irow-bot { display: flex; align-items: center; gap: 8px; }
+.irow-top .text { flex: 1; min-width: 0; }
+.irow-top .amount { width: 128px; }
+.irow.is-hidden .text { color: var(--muted); text-decoration: line-through; }
+.grow { flex: 1; }
+.orow { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--line); }
+.list .orow:first-child { border-top: 0; }
+.oname { flex: 1; min-width: 0; font-weight: 600; display: grid; overflow-wrap: anywhere; }
+.oname small { font-weight: 400; color: var(--muted); font-size: 12px; }
+button.mv { min-width: 48px; min-height: 44px; font-size: 18px; font-weight: 700; color: var(--accent); }
+button.mv:disabled { opacity: .3; }
 .srow.add-row { border-bottom: 0; padding-bottom: 14px; }
 .nowrap { white-space: nowrap; min-width: 2.8em; text-align: right; }
 
