@@ -21,7 +21,14 @@
   function yenTxt(n) { return n == null ? '' : nf.format(n); }
   function md(dt) { return dt.m + '/' + dt.d; }
   function mdw(dt) { const w = C.weekday(dt); return md(dt) + '(' + C.WD[w] + ')'; }
-  function isWeekend(dt) { const w = C.weekday(dt); return w === 0 || w === 6; }
+  function isWeekend(dt) { return !C.isBusinessDay(dt); } // 土日・祝日・年末年始
+  const SHIFT_LABEL = { after: '休日なら後ろ（翌営業日）', before: '休日なら前（前営業日）', none: 'ずらさない' };
+  function shiftSelect(id, mode, aria) {
+    return '<select id="' + id + '" data-f="shift" aria-label="' + (aria || '休日の場合') + '">' + ['after', 'before', 'none'].map(k => '<option value="' + k + '"' + (k === mode ? ' selected' : '') + '>' + SHIFT_LABEL[k] + '</option>').join('') + '</select>';
+  }
+  function validShift(v, def) { return ['after', 'before', 'none'].includes(v) ? v : def; }
+  /** 休日でずれた日付の注記 */
+  function shiftNote(dt) { if (!dt || !dt.orig) return ''; const n = C.holidayName(dt.orig); return '<span class="shifted">（' + md(dt.orig) + 'が' + (n || '休日') + '）</span>'; }
   function today() { return C.fromDate(new Date()); }
   function keyOf(dt) { return dt.y + '-' + dt.m + '-' + dt.d; }
   function uid(p) { return p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -74,7 +81,7 @@
   function normalize(d) {
     if (!d || d.app !== 'kakeibo' || !Array.isArray(d.accounts) || !Array.isArray(d.variable) || !Array.isArray(d.fixed)) throw new Error('入金準備帳のデータではありません');
     const item = (x, fixed) => {
-      const o = { id: x.id || uid(fixed ? 'f' : 'v'), name: String(x.name || '').trim() || '（名称なし）', day: x.day, account: x.account || '', amount: x.amount == null ? null : Number(x.amount), memo: x.memo || '', updatedAt: x.updatedAt || null, hidden: !!x.hidden };
+      const o = { id: x.id || uid(fixed ? 'f' : 'v'), name: String(x.name || '').trim() || '（名称なし）', day: x.day, account: x.account || '', amount: x.amount == null ? null : Number(x.amount), memo: x.memo || '', updatedAt: x.updatedAt || null, hidden: !!x.hidden, shift: validShift(x.shift, 'after') };
       if (fixed) o.end = x.end || null;
       if (!validDay(o.day)) throw new Error('引落日が読み取れない項目があります：' + o.name);
       if (!validAmt(o.amount)) throw new Error('金額が読み取れない項目があります：' + o.name);
@@ -87,7 +94,7 @@
       fixed: d.fixed.map(x => item(x, true)),
       balances: {},
       hiddenAccounts: Array.isArray(d.hiddenAccounts) ? d.hiddenAccounts.map(String).filter(a => d.accounts.map(String).includes(a)) : [],
-      income: Array.isArray(d.income) && d.income.length ? d.income.map(i => ({ id: i.id || uid('i'), name: String(i.name), day: i.day, amount: i.amount == null ? null : Number(i.amount), hidden: !!i.hidden }))
+      income: Array.isArray(d.income) && d.income.length ? d.income.map(i => ({ id: i.id || uid('i'), name: String(i.name), day: i.day, amount: i.amount == null ? null : Number(i.amount), hidden: !!i.hidden, shift: validShift(i.shift, 'before') }))
         : [{ id: 'i1', name: '直樹', day: 25, amount: null }, { id: 'i2', name: '寿美', day: 15, amount: null }]
     };
     for (const a of out.accounts) {
@@ -169,8 +176,8 @@
   }
 
   function summaryHTML(r) {
-    const per = r.windows.map(w => '<div class="period' + (w.inClose ? '' : ' after') + '"><span class="lab">' + w.label + 'に必要' + (w.inClose ? '' : '<span class="tag">締め後</span>') + '</span><span class="rng">' + md(w.from) + '〜' + md(w.to) + '</span><span class="val num" data-sum="' + w.key + '">' + yen(r.totals[w.key]) + '</span></div>').join('');
-    const inc = r.income.map(i => '<div class="income-row"><span class="who">' + esc(i.name) + '</span><span class="when">' + (i.next ? mdw(i.next) + ' 予定' : '') + '</span>' +
+    const per = r.windows.map(w => '<div class="period' + (w.inClose ? '' : ' after') + '"><span class="lab">' + w.label + 'に必要' + (w.inClose ? '' : '<span class="tag">締め後</span>') + '</span><span class="rng">' + md(w.from) + '〜' + md(w.to) + (w.key === 'w10' && w.to.d !== 10 ? '<br>10日が休日のため' + w.to.d + '日締め' : '') + '</span><span class="val num" data-sum="' + w.key + '">' + yen(r.totals[w.key]) + '</span></div>').join('');
+    const inc = r.income.map(i => '<div class="income-row"><span class="who">' + esc(i.name) + '</span><span class="when">' + (i.next ? '<span class="' + (isWeekend(i.next) ? 'wkend' : '') + '">' + mdw(i.next) + '</span> 予定' + shiftNote(i.next) : '') + '</span>' +
       '<input class="amount' + (i.amount == null ? ' empty' : '') + '" inputmode="numeric" enterkeyhint="done" autocomplete="off" id="inc-' + esc(i.id) + '" data-inc="' + esc(i.id) + '" value="' + yenTxt(i.amount) + '" placeholder="金額（任意）" aria-label="' + esc(i.name) + 'の収入予定額"></div>').join('');
     return '<section class="summary" id="sec-top" aria-label="要約">' +
       '<div class="periods">' + per + '</div>' + shortboxHTML(r) +
@@ -191,7 +198,7 @@
       const ls = b.lines[w.key];
       if (!ls.length) return '<div class="wh">' + w.label + '：なし</div>';
       return '<div class="wh">' + w.label + '（' + md(w.from) + '〜' + md(w.to) + '）</div>' + ls.map(l =>
-        '<div class="li"><span class="' + (isWeekend(l.date) ? 'wkend' : '') + '">' + mdw(l.date) + '</span><span>' + esc(l.name) + ' <span class="sub">' + l.kind + '</span></span><span class="num">' + (l.amount == null ? '<span class="flag">未入力</span>' : nf.format(l.amount) + '円') + '</span></div>').join('');
+        '<div class="li"><span class="' + (isWeekend(l.date) ? 'wkend' : '') + '">' + mdw(l.date) + '</span><span>' + esc(l.name) + ' <span class="sub">' + l.kind + '</span>' + (l.orig ? '<br>' + shiftNote(l) : '') + '</span><span class="num">' + (l.amount == null ? '<span class="flag">未入力</span>' : nf.format(l.amount) + '円') + '</span></div>').join('');
     }).join('');
   }
 
@@ -207,7 +214,7 @@
     const idleTxt = idle.length ? '<div class="idle">この期間に引落のない口座：<b>' + idle.map(b => esc(b.name)).join('、') + '</b></div>' : '';
     return '<section id="banksSec" aria-label="銀行別の入金準備表"><div class="section-head"><h2>銀行別の入金準備</h2><span class="sub">' + r.activeCount + '口座</span></div>' +
       '<div class="banks">' + (cards || '<div class="idle">この期間の引落はありません</div>') + idleTxt + '</div>' +
-      '<p class="note">集計は確認日以降の引落だけです。引落日が土日祝の場合の扱いは元のExcelに決まりがないため、日付どおりに数えています（土日は赤字）。</p></section>';
+      '<p class="note">集計は確認日以降の引落だけです。土日・祝日・年末年始（12/31〜1/3）に当たる日は、項目ごとの設定（初期値は支出が後ろ、収入が前）でずらしています。締め日の10日が休日なら、締め日も翌営業日に延ばします。</p></section>';
   }
 
   function daySelect(id, d) {
@@ -236,10 +243,11 @@
         '<div class="row-sub">' + daySelect('day-' + esc(it.id), it.day) + acctSelect('acc-' + esc(it.id), it.account) +
         '<span class="stamp" data-stamp>' + stampText(it.updatedAt) + '</span></div>' +
         ((it.memo || it.end) ? '<div class="memo">' + (it.end ? (ended ? '終了しました（' : '終了予定 ') + it.end.replace('-', '/') + (ended ? '）' : '') + (it.memo ? '　' : '') : '') + esc(it.memo) + '</div>' : '') +
-        '<div class="row-acts"><button class="ghost small" data-act="edit">名前・メモ・削除</button><button class="ghost small" data-act="hide">非表示にする</button></div>' +
+        '<div class="row-acts"><button class="ghost small" data-act="edit">詳細（名前・休日・削除）</button><button class="ghost small" data-act="hide">非表示にする</button></div>' +
         '<div class="edit" hidden data-editor>' +
         '<label>項目名<input class="text" id="nm-' + esc(it.id) + '" data-f="name" value="' + esc(it.name) + '"></label>' +
         (kind === 'fixed' ? '<label>終了月（空欄なら毎月）<input class="text" type="month" id="end-' + esc(it.id) + '" data-f="end" value="' + esc(it.end || '') + '"></label>' : '') +
+        '<label>引落日が休日のとき' + shiftSelect('shift-' + esc(it.id), it.shift || 'after') + '</label>' +
         '<label>メモ<input class="text" id="memo-' + esc(it.id) + '" data-f="memo" value="' + esc(it.memo) + '"></label>' +
         '<div class="btns"><button class="danger small" data-act="del">この項目を削除</button><button class="small" data-act="close">閉じる</button></div></div>' +
         '</div>';
@@ -309,6 +317,7 @@
       '<label>金額（わからなければ空欄）<input class="amount wide" id="qa-amt" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="未入力"></label>' +
       '<div class="two"><label>引落日' + daySelect('qa-day', day) + '</label>' +
       '<label>引落口座<select id="qa-acc" aria-label="引落口座">' + (acc ? '' : '<option value="" selected>選ぶ</option>') + accs.map(a => '<option' + (a === acc ? ' selected' : '') + '>' + esc(a) + '</option>').join('') + '</select></label></div>' +
+      '<label>引落日が休日のとき' + shiftSelect('qa-shift', validShift(meta.qshift, 'after')) + '</label>' +
       (kind === 'fixed' ? '<label>終了月（ローンなど。なければ空欄）<input class="text" type="month" id="qa-end"></label>' : '') +
       '<button class="primary" data-act="qadd">' + (kind === 'fixed' ? '固定費' : '変動費') + 'に追加</button>' +
       (meta.qlast ? '<p class="note" id="qa-last">追加しました：' + esc(meta.qlast) + '</p>' : '') +
@@ -321,11 +330,13 @@
       state.income.map(i => '<div class="irow' + (i.hidden ? ' is-hidden' : '') + '" data-inc-id="' + esc(i.id) + '">' +
         '<div class="irow-top"><input class="text" id="incname-' + esc(i.id) + '" value="' + esc(i.name) + '" aria-label="収入の名前">' +
         '<input class="amount" inputmode="numeric" enterkeyhint="done" autocomplete="off" id="incamt-' + esc(i.id) + '" data-inc="' + esc(i.id) + '" value="' + yenTxt(i.amount) + '" placeholder="金額" aria-label="' + esc(i.name) + 'の金額"></div>' +
-        '<div class="irow-bot">' + daySelect('incday-' + esc(i.id), i.day) + '<span class="sub">に入金</span><span class="grow"></span>' + hideBtn(!!i.hidden, 'inchide') + '<button class="danger small" data-act="incdel">削除</button></div></div>').join('');
+        '<div class="irow-bot">' + daySelect('incday-' + esc(i.id), i.day) + shiftSelect('incshift-' + esc(i.id), i.shift || 'before', '入金日が休日のとき') + '</div>' +
+        '<div class="irow-bot"><span class="grow"></span>' + hideBtn(!!i.hidden, 'inchide') + '<button class="danger small" data-act="incdel">削除</button></div></div>').join('');
     return '<div class="card">' + '<div class="pad">' + headHTML('収入', state.income.length + '件', 'income') + '<p class="sub" style="margin:0">未入金の収入は口座残高に足しません。非表示にすると準備ページに出ません。</p></div>' +
       list + (on ? '' :
       '<div class="form addform"><div class="shead">収入を追加</div>' +
       '<label>名前<input class="text" id="inc-new-name" autocomplete="off" placeholder="例：児童手当"></label>' +
+      '<label>入金日が休日のとき' + shiftSelect('inc-new-shift', 'before') + '</label>' +
       '<div class="two"><label>入金日' + daySelect('inc-new-day', 25) + '</label><label>金額（任意）<input class="amount wide" id="inc-new-amt" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="未入力"></label></div>' +
       '<button class="primary" data-act="incadd">収入に追加</button></div>') + '</div>';
   }
@@ -363,7 +374,8 @@
         if (!name) { toast('項目名を入力してください'); $('#qa-name').focus(); return; }
         if (Number.isNaN(v)) { toast('金額は数字で入力してください'); amt.focus(); return; }
         if (!acc) { toast('引落口座を選んでください'); return; }
-        const it = { id: uid(kind === 'fixed' ? 'f' : 'v'), name, day, account: acc, amount: v, memo: '', updatedAt: new Date().toISOString(), hidden: false };
+        const shift = validShift($('#qa-shift').value, 'after'); meta.qshift = shift;
+        const it = { id: uid(kind === 'fixed' ? 'f' : 'v'), name, day, account: acc, amount: v, memo: '', updatedAt: new Date().toISOString(), hidden: false, shift };
         if (kind === 'fixed') { const e = $('#qa-end'); it.end = e && e.value ? e.value : null; }
         state[kind].push(it); save();
         meta.qacc = acc; meta.qday = day;
@@ -375,7 +387,8 @@
     main.querySelectorAll('[data-inc-id]').forEach(row => {
       const inc = state.income.find(x => x.id === row.dataset.incId);
       row.querySelector('input.text').addEventListener('change', e => { const n = e.target.value.trim(); if (!n) { e.target.value = inc.name; return; } inc.name = n; save(); renderKeep(); });
-      row.querySelector('select').addEventListener('change', e => { inc.day = e.target.value === 'end' ? 'end' : Number(e.target.value); save(); renderKeep(); });
+      row.querySelector('select[id^="incday-"]').addEventListener('change', e => { inc.day = e.target.value === 'end' ? 'end' : Number(e.target.value); save(); renderKeep(); });
+      row.querySelector('select[id^="incshift-"]').addEventListener('change', e => { inc.shift = validShift(e.target.value, 'before'); save(); renderKeep(); toast('「' + inc.name + '」：' + SHIFT_LABEL[inc.shift]); });
       row.querySelector('[data-act="inchide"]').addEventListener('click', () => { inc.hidden = !inc.hidden; save(); renderKeep(); toast(inc.hidden ? '「' + inc.name + '」を非表示にしました' : '「' + inc.name + '」を表示しました'); });
       row.querySelector('[data-act="incdel"]').addEventListener('click', () => confirmSheet('収入「' + inc.name + '」を削除しますか？', '', '削除する', () => {
         state.income = state.income.filter(x => x.id !== inc.id); save(); renderKeep(); toast('削除しました');
@@ -390,7 +403,7 @@
         const dv = $('#inc-new-day').value;
         if (!n) { toast('収入の名前を入力してください'); return; }
         if (Number.isNaN(v)) { toast('金額は数字で入力してください'); return; }
-        state.income.push({ id: uid('i'), name: n, day: dv === 'end' ? 'end' : Number(dv), amount: v, hidden: false });
+        state.income.push({ id: uid('i'), name: n, day: dv === 'end' ? 'end' : Number(dv), amount: v, hidden: false, shift: validShift($('#inc-new-shift').value, 'before') });
         save(); renderKeep(); toast('「' + n + '」を追加しました');
       });
     }
@@ -479,6 +492,7 @@
       row.querySelector('[data-act="close"]').addEventListener('click', () => { ed.hidden = true; });
       row.querySelector('[data-f="name"]').addEventListener('change', e => { const n = e.target.value.trim(); if (!n || n === it.name) return; it.name = n; touch(it, row); save(); renderKeep(); });
       row.querySelector('[data-f="memo"]').addEventListener('change', e => { it.memo = e.target.value; save(); renderKeep(); });
+      row.querySelector('[data-f="shift"]').addEventListener('change', e => { it.shift = validShift(e.target.value, 'after'); touch(it, row); save(); renderKeep(); toast('「' + it.name + '」：' + SHIFT_LABEL[it.shift]); });
       const end = row.querySelector('[data-f="end"]');
       if (end) end.addEventListener('change', e => { it.end = e.target.value || null; touch(it, row); save(); renderKeep(); });
       row.querySelector('[data-act="del"]').addEventListener('click', () => confirmSheet('「' + it.name + '」を削除しますか？', '<p class="sub" style="margin:0">' + dayLabel(it.day) + '・' + esc(it.account) + '・' + (it.amount == null ? '未入力' : nf.format(it.amount) + '円') + '</p>', '削除する', () => {
